@@ -224,3 +224,7 @@ node --check background.js
 node --check sidepanel.js
 node --check options.js
 ```
+
+## Credits
+
+Built with assistance from OpenAI Codex.
