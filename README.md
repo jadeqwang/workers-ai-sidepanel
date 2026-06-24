@@ -2,7 +2,9 @@
 
 A dependency-free Manifest V3 Chrome side-panel extension for **any OpenAI-compatible chat endpoint**, with optional fallback routing for transient model-capacity failures.
 
-It is named for Cloudflare Workers AI (which it works with out of the box), but it talks plain OpenAI `/chat/completions`, so it works with anything that speaks that format — including Anthropic's Claude models through their OpenAI-compatibility layer. Settings are stored in your local Chrome profile, and no API credentials are bundled with the extension.
+It is named for Cloudflare Workers AI (which it works with out of the box), but it talks plain OpenAI `/chat/completions`, so it works with anything that speaks that format — including OpenAI's hosted models and Anthropic's Claude models through their OpenAI-compatibility layer. Settings are stored in your local Chrome profile, and no API credentials are bundled with the extension.
+
+Use it when you want a browser-side AI panel without handing a model provider blanket access to your browser profile. You choose the endpoint, token, and model, so you can route through providers that work better in geographically restricted regions, keep credentials under your own control, and grant page access only when you explicitly attach a tab.
 
 ## Features
 
@@ -33,7 +35,7 @@ Every provider needs the same three things in the options page:
 | **Model** | The exact model ID string the provider expects |
 | **Bearer token** | An API token/key for that provider |
 
-The two walkthroughs below fill those in for Cloudflare Workers AI and for Claude. Pick whichever you want (or set one as the primary and the other as the fallback).
+The two walkthroughs below fill those in for Cloudflare Workers AI and for closed-model providers such as OpenAI and Anthropic. Pick whichever you want (or set one as the primary and the other as the fallback).
 
 ---
 
@@ -92,35 +94,66 @@ Click **Save settings**, open the side panel, and send a message.
 
 ---
 
-## Guide 2 — Claude (Anthropic)
+## Guide 2 — Closed models (OpenAI and Claude)
 
-**Yes — Claude works with this extension.** Anthropic does not use the OpenAI format natively, but it provides an OpenAI-compatibility layer: you point any OpenAI-style client at Anthropic's base URL and use a Claude model name. This extension is exactly such a client.
+Closed-model providers work as long as they expose the OpenAI Chat Completions shape that this extension uses. OpenAI's own endpoint works directly, and Claude works through Anthropic's OpenAI-compatibility layer.
 
-### Step 1 — Get an Anthropic API key
+### Option A — OpenAI
 
-Create one in the [Anthropic Console](https://console.anthropic.com/settings/keys). Copy it — it starts with `sk-ant-...`.
+Use this when you want to call OpenAI-hosted models with an OpenAI API key.
 
-### Step 2 — Fill in the options page
+1. Create an API key in the [OpenAI platform dashboard](https://platform.openai.com/api-keys). Copy it now; you will not be able to view the full key again later.
+2. Fill in the extension options:
 
-- **Endpoint URL:**
+   - **Endpoint URL:**
 
-  ```text
-  https://api.anthropic.com/v1/chat/completions
-  ```
+     ```text
+     https://api.openai.com/v1/chat/completions
+     ```
 
-- **Model:** a Claude model ID, for example:
+   - **Model:** an OpenAI Chat Completions model ID, for example:
 
-  | Use | Model ID |
-  | --- | --- |
-  | Most capable | `claude-opus-4-8` |
-  | Balanced speed/cost | `claude-sonnet-4-6` |
-  | Fastest/cheapest | `claude-haiku-4-5` |
+     | Use | Model ID |
+     | --- | --- |
+     | Latest flagship chat | `gpt-5.4` |
+     | Small, fast chat | `gpt-4o-mini` |
 
-- **Bearer token:** your `sk-ant-...` key
+     Model availability changes over time and can depend on your project. The authoritative source is the [OpenAI model list](https://platform.openai.com/docs/models), or the `/v1/models` API for your account.
 
-Click **Save settings** and start chatting.
+   - **Bearer token:** your OpenAI API key
 
-### Good to know
+3. Click **Save settings**, open the side panel, and send a message.
+
+The extension uses OpenAI's Chat Completions endpoint, not the newer Responses API. That is intentional: the extension is designed around the widely supported OpenAI-compatible `/chat/completions` contract.
+
+### Option B — Claude (Anthropic)
+
+Anthropic does not use the OpenAI format natively, but it provides an OpenAI-compatibility layer: you point any OpenAI-style client at Anthropic's base URL and use a Claude model name. This extension is exactly such a client.
+
+1. Create an API key in the [Anthropic Console](https://console.anthropic.com/settings/keys). Copy it; it starts with `sk-ant-...`.
+2. Fill in the extension options:
+
+   - **Endpoint URL:**
+
+     ```text
+     https://api.anthropic.com/v1/chat/completions
+     ```
+
+   - **Model:** a Claude model ID, for example:
+
+     | Use | Model ID |
+     | --- | --- |
+     | Most capable | `claude-opus-4-8` |
+     | Balanced speed/cost | `claude-sonnet-4-6` |
+     | Fastest/cheapest | `claude-haiku-4-5` |
+
+     Model IDs change over time. Copy the exact ID from Anthropic's current model documentation or console.
+
+   - **Bearer token:** your `sk-ant-...` key
+
+3. Click **Save settings** and start chatting.
+
+### Claude compatibility notes
 
 Anthropic positions the OpenAI-compatibility layer as a way to **test and compare** Claude through OpenAI-format tooling, not as a long-term production path. For everyday side-panel chat it works well; just be aware of these behaviors:
 
@@ -136,7 +169,7 @@ None of these require any change to the extension — they're just differences f
 
 If you configure a **fallback endpoint** and **fallback model**, the extension uses them **only** for transient capacity-style failures from the primary — HTTP 502/503/504 and errors like `3040: Capacity temporarily exceeded`. Normal errors (bad token, wrong model ID, etc.) are surfaced directly and are not retried on the fallback.
 
-The fallback has its own endpoint URL, model, and bearer token, so you can fall back to a different model on the same provider (e.g. GLM → Kimi) or to an entirely different provider (e.g. Cloudflare → Claude).
+The fallback has its own endpoint URL, model, and bearer token, so you can fall back to a different model on the same provider (e.g. GLM → Kimi) or to an entirely different provider (e.g. Cloudflare → OpenAI or Claude).
 
 ## Expected API contract
 
@@ -160,7 +193,7 @@ For GLM model IDs only, it also adds a flag to suppress GLM's separate reasoning
 }
 ```
 
-This flag is sent only when the model ID contains `glm`, so it has no effect on Kimi, Claude, or other providers.
+This flag is sent only when the model ID contains `glm`, so it has no effect on Kimi, OpenAI, Claude, or other providers.
 
 It expects streaming SSE chunks with `choices[0].delta.content` for answer text, and also has a non-streaming fallback path for endpoints that return `choices[0].message.content`.
 
