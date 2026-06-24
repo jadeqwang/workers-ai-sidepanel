@@ -6,6 +6,14 @@ It is named for Cloudflare Workers AI (which it works with out of the box), but 
 
 Use it when you want a browser-side AI panel without handing a model provider blanket access to your browser profile. You choose the endpoint, token, and model, so you can route through providers that work better in geographically restricted regions, keep credentials under your own control, and grant page access only when you explicitly attach a tab.
 
+## Why this exists
+
+I built this while working on [Spaces Left Blank](https://spacesleftblank.com/), my science-fiction memoirs in verse and AI-playable art/poetry experience, plus an expansion work: an escape-room-adjacent adventure for a human and an AI to copilot together. In both works, the AI is part of the experience of the piece, including making the puzzles possible to solve. "View Source" and "The Console Dialogues" follows a cast of characters who are familiar command line sigils (e.g., the narrator › , $, #, %, ~) who you, the player, inhabit by typing their next action.
+
+I wanted to demo that experience to my parents when visiting them in Shanghai over the summer, but frontier models are region-locked. I considered the option of recording a video demo, but it would literally suck the soul out of the experience. So I made a "bring your own robot friend" option: a local side panel that can point at whichever model provider is reachable for the person using it.
+
+This extension is the general version of the fix for the browser extension necessary for playing the escape room experience. I also created a "bring your own robot friend" option for the original trilogy: [Spaces Left Blank](https://spacesleftblank.com/run-it-yourself).
+
 ## Features
 
 - Side-panel chat UI
