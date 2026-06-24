@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Workers AI Sidepanel</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="chat-page">
+    <header>
+      <div>
+        <h1>Workers AI</h1>
+        <span id="model-label">Not configured</span>
+      </div>
+      <div class="header-actions">
+        <button id="add-page" class="page-button" title="Include the current page in this chat">＋ Page</button>
+        <button id="clear" class="icon-button" title="Clear conversation" aria-label="Clear conversation">↺</button>
+        <button id="settings" class="icon-button" title="Settings" aria-label="Settings">⚙</button>
+      </div>
+    </header>
+    <main id="messages" aria-live="polite"></main>
+    <form id="chat-form">
+      <div id="page-context-bar" class="page-context-bar" hidden>
+        <span id="page-context-label"></span>
+        <button id="control-page" type="button" aria-pressed="false">Control off</button>
+        <button id="remove-page" type="button">Remove</button>
+      </div>
+      <label class="sr-only" for="prompt">Message</label>
+      <textarea id="prompt" rows="3" placeholder="Message Workers AI…" required></textarea>
+      <div class="composer-row">
+        <span class="hint">Enter to send · Shift+Enter for newline</span>
+        <button id="send" type="submit">Send</button>
+      </div>
+    </form>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

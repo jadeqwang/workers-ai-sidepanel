@@ -1,0 +1,8 @@
+.DS_Store
+*.zip
+dist/
+build/
+node_modules/
+npm-debug.log*
+.env
+.env.*
