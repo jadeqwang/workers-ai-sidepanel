@@ -235,4 +235,8 @@ node --check options.js
 
 ## Credits
 
-Built with assistance from OpenAI Codex.
+Built collaboratively by Jade Wang, OpenAI Codex, and Claude.
+
+## License
+
+MIT
