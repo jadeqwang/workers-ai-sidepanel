@@ -1,8 +1,8 @@
 # Workers AI Sidepanel
 
-A dependency-free Manifest V3 Chrome side-panel extension for OpenAI-compatible chat endpoints, with optional fallback routing for transient model capacity failures.
+A dependency-free Manifest V3 Chrome side-panel extension for **any OpenAI-compatible chat endpoint**, with optional fallback routing for transient model-capacity failures.
 
-The extension works well with Cloudflare Workers AI's OpenAI-compatible `/chat/completions` endpoint. It stores settings in the local Chrome profile and does not bundle any API credentials.
+It is named for Cloudflare Workers AI (which it works with out of the box), but it talks plain OpenAI `/chat/completions`, so it works with anything that speaks that format — including Anthropic's Claude models through their OpenAI-compatibility layer. Settings are stored in your local Chrome profile, and no API credentials are bundled with the extension.
 
 ## Features
 
@@ -20,40 +20,131 @@ The extension works well with Cloudflare Workers AI's OpenAI-compatible `/chat/c
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select this directory.
 5. Open the extension's **Details**, then **Extension options**.
-6. Enter your endpoint, model, and authentication values.
+6. Enter your endpoint, model, and authentication values (see the provider guides below).
 7. Pin the extension and click its toolbar icon to open the side panel.
 
-## Cloudflare Workers AI Setup
+## What you need to configure
 
-Use Cloudflare's OpenAI-compatible Workers AI endpoint:
+Every provider needs the same three things in the options page:
+
+| Field | What it is |
+| --- | --- |
+| **Endpoint URL** | The full `/chat/completions` URL for your provider |
+| **Model** | The exact model ID string the provider expects |
+| **Bearer token** | An API token/key for that provider |
+
+The two walkthroughs below fill those in for Cloudflare Workers AI and for Claude. Pick whichever you want (or set one as the primary and the other as the fallback).
+
+---
+
+## Guide 1 — Cloudflare Workers AI (GLM and Kimi)
+
+Workers AI hosts models like Zhipu's **GLM** and Moonshot's **Kimi** and serves them from a single OpenAI-compatible endpoint. You don't "spin up" or deploy anything — the models already run in Cloudflare's catalog, and you just call them by ID. You only need three things: your **Account ID**, an **API token**, and the **model ID**.
+
+### Step 1 — Create a free Cloudflare account
+
+Go to [dash.cloudflare.com](https://dash.cloudflare.com) and sign up (the free plan includes a Workers AI allowance).
+
+### Step 2 — Get your Account ID and an API token
+
+1. In the dashboard sidebar, open **AI → Workers AI**.
+2. Click **Use REST API** (Cloudflare shows this to help you call models from outside a Worker).
+3. Cloudflare displays your account-specific endpoint, which contains your **Account ID** — it looks like:
+
+   ```text
+   https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/...
+   ```
+
+   Copy the `YOUR_ACCOUNT_ID` value (a long string of letters and numbers).
+4. On the same screen, choose **Create a Workers AI API Token** (or go to **My Profile → API Tokens → Create Token** and use the **Workers AI** template). Create it and **copy the token now** — Cloudflare only shows it once.
+
+### Step 3 — Build your endpoint URL
+
+Take the Account ID from Step 2 and plug it into this exact URL:
 
 ```text
 https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1/chat/completions
 ```
 
-Create a Workers AI API token in the Cloudflare dashboard, then enter it as the bearer token.
+That `/ai/v1/chat/completions` path is the OpenAI-compatible one — make sure it ends exactly like that.
 
-Example primary model:
+### Step 4 — Pick your model IDs
 
-```text
-@cf/zai/glm-4.5-air
-```
+Cloudflare model IDs always start with `@cf/`. Use the **full** ID, including the prefix — a bare name like `glm-5.2` will not work.
 
-Example Kimi fallback model:
+| Use | Model ID |
+| --- | --- |
+| GLM (general chat) | `@cf/zai-org/glm-5.2` |
+| Kimi (general chat) | `@cf/moonshotai/kimi-k2.6` |
+| Kimi (coding) | `@cf/moonshotai/kimi-k2.7-code` |
 
-```text
-@cf/moonshotai/kimi-k2.7-code
-```
+Model IDs and versions change over time. The authoritative list is the [Workers AI model catalog](https://developers.cloudflare.com/workers-ai/models/) — open a model's page and copy the ID shown there.
 
-If you configure a fallback endpoint, the extension only uses it for transient capacity-style failures such as `3040: Capacity temporarily exceeded`.
+### Step 5 — Fill in the options page
 
-## Expected API Contract
+- **Endpoint URL:** the URL from Step 3
+- **Model:** e.g. `@cf/zai-org/glm-5.2`
+- **Bearer token:** the API token from Step 2
 
-The extension sends OpenAI-compatible chat completion requests:
+Click **Save settings**, open the side panel, and send a message.
+
+> **Tip — GLM + Kimi together.** A nice setup is GLM as the **primary** model and Kimi as the **fallback** (same endpoint URL and token, different model ID), so that if GLM is briefly at capacity the extension automatically retries on Kimi. See [Fallback routing](#fallback-routing-optional).
+
+---
+
+## Guide 2 — Claude (Anthropic)
+
+**Yes — Claude works with this extension.** Anthropic does not use the OpenAI format natively, but it provides an OpenAI-compatibility layer: you point any OpenAI-style client at Anthropic's base URL and use a Claude model name. This extension is exactly such a client.
+
+### Step 1 — Get an Anthropic API key
+
+Create one in the [Anthropic Console](https://console.anthropic.com/settings/keys). Copy it — it starts with `sk-ant-...`.
+
+### Step 2 — Fill in the options page
+
+- **Endpoint URL:**
+
+  ```text
+  https://api.anthropic.com/v1/chat/completions
+  ```
+
+- **Model:** a Claude model ID, for example:
+
+  | Use | Model ID |
+  | --- | --- |
+  | Most capable | `claude-opus-4-8` |
+  | Balanced speed/cost | `claude-sonnet-4-6` |
+  | Fastest/cheapest | `claude-haiku-4-5` |
+
+- **Bearer token:** your `sk-ant-...` key
+
+Click **Save settings** and start chatting.
+
+### Good to know
+
+Anthropic positions the OpenAI-compatibility layer as a way to **test and compare** Claude through OpenAI-format tooling, not as a long-term production path. For everyday side-panel chat it works well; just be aware of these behaviors:
+
+- Prompt caching and Claude's detailed extended-thinking output are not exposed through this layer (they're available in Anthropic's native API).
+- Multiple system messages are concatenated into one at the start of the conversation.
+- `temperature` is accepted between 0 and 1; higher values are capped at 1.
+
+None of these require any change to the extension — they're just differences from the native Claude API.
+
+---
+
+## Fallback routing (optional)
+
+If you configure a **fallback endpoint** and **fallback model**, the extension uses them **only** for transient capacity-style failures from the primary — HTTP 502/503/504 and errors like `3040: Capacity temporarily exceeded`. Normal errors (bad token, wrong model ID, etc.) are surfaced directly and are not retried on the fallback.
+
+The fallback has its own endpoint URL, model, and bearer token, so you can fall back to a different model on the same provider (e.g. GLM → Kimi) or to an entirely different provider (e.g. Cloudflare → Claude).
+
+## Expected API contract
+
+The extension sends standard OpenAI-compatible chat completion requests:
 
 ```json
 {
-  "model": "@cf/example/model",
+  "model": "@cf/zai-org/glm-5.2",
   "messages": [{ "role": "user", "content": "Hello" }],
   "temperature": 0.7,
   "max_tokens": 2048,
@@ -61,7 +152,7 @@ The extension sends OpenAI-compatible chat completion requests:
 }
 ```
 
-For GLM model IDs, the extension also sends:
+For GLM model IDs only, it also adds a flag to suppress GLM's separate reasoning channel:
 
 ```json
 {
@@ -69,9 +160,11 @@ For GLM model IDs, the extension also sends:
 }
 ```
 
-It expects streaming SSE chunks with `choices[0].delta.content` for answer text. It also has a non-streaming fallback path for endpoints that return `choices[0].message.content`.
+This flag is sent only when the model ID contains `glm`, so it has no effect on Kimi, Claude, or other providers.
 
-## Page Context
+It expects streaming SSE chunks with `choices[0].delta.content` for answer text, and also has a non-streaming fallback path for endpoints that return `choices[0].message.content`.
+
+## Page context
 
 To discuss the active tab, click **+ Page** in the side panel and grant access to that site's origin when Chrome asks. The extension reads visible text plus available tooltip and accessibility metadata only after that explicit action.
 

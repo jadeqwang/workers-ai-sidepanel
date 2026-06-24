@@ -1,6 +1,6 @@
 const DEFAULTS = {
   endpoint: "",
-  model: "glm-5.2",
+  model: "@cf/zai-org/glm-5.2",
   bearerToken: "",
   fallbackEndpoint: "",
   fallbackModel: "",
