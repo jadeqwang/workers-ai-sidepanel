@@ -12,7 +12,7 @@ Confirmed constraints (2026-06-27):
 
 ## Status
 
-### Phase 1a — Native tool-calling migration ✅ DONE (this commit/working tree)
+### Phase 1a — Native tool-calling migration ✅ DONE
 Implemented in `background.js`:
 - `BROWSER_TOOL_DEFINITIONS` — JSON-schema defs for all 12 tools.
 - `browserToolDefinitions(pageContext)` — omits CONTROL_TOOLS when control is off, so the
@@ -28,14 +28,12 @@ Implemented in `background.js`:
 - `buildRequestBody` sends `tools` + `tool_choice:"auto"` when tools are provided.
 - System prompt updated to prefer function calls and allow up to 3 per turn.
 
-**Not yet verified in a live browser** — needs a manual smoke test against the real
-endpoint (load unpacked, attach a page, ask it to read + act). Watch for: providers that
-reject assistant messages with `content:""` (may need `content:null`); and whether the
-GLM `thinking:{type:"disabled"}` flag coexists with `tools`.
+Live browser note: user verified the Dinner Elf `get_dinnerelf_dishes` path after the
+legacy mixed-output parser fix.
 
 ## Remaining work
 
-### Phase 1b — Action log + screenshot thumbnails (transparency) ✅ DONE (working tree)
+### Phase 1b — Action log + screenshot thumbnails (transparency) ✅ DONE
 Implemented:
 - `background.js` now threads `onToolStep` through the streaming port and emits a
   `tool_step` message after each executed tool with `tool`, `arguments`, concise `summary`,
@@ -46,11 +44,10 @@ Implemented:
   `background.js` captures a `chrome.tabs.captureVisibleTab` PNG after control actions only.
   The screenshot stays out of model-visible `workingMessages`.
 
-**Not yet verified in a live browser** — needs a manual smoke test against the real
-endpoint. Watch for capture permissions on non-active tabs; this implementation simply
-omits the thumbnail if capture fails.
+Live browser note: timeline behavior still needs explicit thumbnail testing with
+`showToolScreenshots` enabled. Capture failures are non-fatal and simply omit thumbnails.
 
-### Phase 2 — Loop hardening ✅ DONE (working tree)
+### Phase 2 — Loop hardening ✅ DONE
 Implemented:
 - `maxToolSteps` setting in `options.html`/`options.js`, default 6, clamped to 1-20 in
   `background.js`.
@@ -59,9 +56,32 @@ Implemented:
   as stopped without falling back to buffered mode.
 - `wait_for` read-only tool in `background.js`: native schema, legacy allowlist, prompt
   docs, page-side polling with selector validation, optional visibility, and capped timeout.
+- Browser-agent content guard in `background.js`: page-agent model turns are buffered until
+  they are known to be final answers, leaked `<think>` tags are stripped from visible
+  content, and planning-only loops such as repeated "I'll fetch..." text are redirected
+  into an explicit tool-call attempt.
 
-**Not yet verified in a live browser** — syntax and parser smoke checks pass, but Stop and
-`wait_for` should still be tested against an unpacked extension run.
+Live browser note: user verified the Dinner Elf prompt works after the planning-loop guard.
+Still test Stop and `wait_for` manually in an unpacked extension run.
+
+## Next Instance Checklist
+
+Start from branch `codex/agent-loop-hardening` / commit `1b6a008` or later.
+
+1. Reload the unpacked extension and run a focused smoke test:
+   - Dinner Elf read-only filtering (`get_dinnerelf_dishes`) should answer without visible
+     `<think>` leakage or "please continue".
+   - Stop should cancel an in-flight request and leave a clean "Stopped." assistant turn.
+   - `wait_for` should succeed on a selector that appears later and time out cleanly on a
+     missing selector.
+   - Optional screenshots should render in the browser-action timeline when
+     `showToolScreenshots` is enabled.
+2. Open a PR from `codex/agent-loop-hardening` to `main`. The local machine does not have
+   `gh`; previous GitHub connector PR creation failed with `403 Resource not accessible by
+   integration`, so use the browser URL if needed:
+   `https://github.com/jadeqwang/workers-ai-sidepanel/pull/new/codex/agent-loop-hardening`.
+3. If continuing implementation, Phase 3 is next: cross-origin/new-tab `open_url`, then
+   hard human approval gates for sensitive actions.
 
 ### Phase 3 — Reach & safety
 - **Cross-origin / multi-tab navigation**: `navigate_url` is same-origin only
