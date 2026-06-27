@@ -30,6 +30,8 @@
           <label>Temperature<input id="temperature" type="number" min="0" max="2" step="0.1"></label>
           <label>Max tokens<input id="maxTokens" type="number" min="1" max="32768" step="1"></label>
         </div>
+        <label>Max browser tool steps<input id="maxToolSteps" type="number" min="1" max="20" step="1"></label>
+        <label class="checkbox-row"><input id="showToolScreenshots" type="checkbox">Show browser-action screenshots in the side panel</label>
         <div class="save-row"><span id="status" role="status"></span><button type="submit">Save settings</button></div>
       </form>
       <aside><strong>Security note:</strong> Chrome local storage is not a secret vault. For a distributed extension, keep provider credentials in your Worker and authenticate users with short-lived credentials.</aside>

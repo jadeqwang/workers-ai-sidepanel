@@ -2,6 +2,7 @@ const messagesEl = document.querySelector("#messages");
 const form = document.querySelector("#chat-form");
 const promptEl = document.querySelector("#prompt");
 const sendButton = document.querySelector("#send");
+const stopButton = document.querySelector("#stop");
 const modelLabel = document.querySelector("#model-label");
 const addPageButton = document.querySelector("#add-page");
 const pageContextBar = document.querySelector("#page-context-bar");
@@ -35,6 +36,7 @@ form.addEventListener("submit", async (event) => {
     role: "assistant",
     content: "",
     reasoningContent: "",
+    toolSteps: [],
     pending: true
   };
   messages.push(assistantMessage);
@@ -74,6 +76,17 @@ document.querySelector("#clear").addEventListener("click", async () => {
 });
 
 document.querySelector("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+stopButton.addEventListener("click", () => {
+  if (!activePort) return;
+  stopButton.disabled = true;
+  activePort.stopRequested = true;
+  try {
+    activePort.postMessage({ type: "cancel" });
+  } catch {
+    activePort.disconnect();
+  }
+});
 
 addPageButton.addEventListener("click", async () => {
   addPageButton.disabled = true;
@@ -328,6 +341,9 @@ function render() {
     if (message.role === "assistant" && message.reasoningContent) {
       article.append(createThinkingDisclosure(message.reasoningContent, message.pending));
     }
+    if (message.role === "assistant" && Array.isArray(message.toolSteps) && message.toolSteps.length) {
+      article.append(createToolTimeline(message.toolSteps));
+    }
     messagesEl.append(article);
   }
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -347,6 +363,58 @@ function createThinkingDisclosure(reasoningContent, pending = false) {
 
   details.append(summary, content);
   return details;
+}
+
+function createToolTimeline(toolSteps, open = false) {
+  const details = document.createElement("details");
+  details.className = "tool-timeline";
+  details.open = open || toolSteps.some((step) => !step.ok);
+
+  const summary = document.createElement("summary");
+  summary.className = "tool-timeline-summary";
+  summary.textContent = `${toolSteps.length.toLocaleString()} browser action${toolSteps.length === 1 ? "" : "s"}`;
+
+  const list = document.createElement("ol");
+  list.className = "tool-step-list";
+  for (const step of toolSteps) {
+    const item = document.createElement("li");
+    item.className = `tool-step ${step.ok ? "ok" : "error"}`;
+
+    const header = document.createElement("div");
+    header.className = "tool-step-header";
+    const status = document.createElement("span");
+    status.className = "tool-step-status";
+    status.textContent = step.ok ? "✓" : "!";
+    const summary = document.createElement("span");
+    summary.className = "tool-step-summary";
+    summary.textContent = step.summary || step.tool || "Browser action";
+    header.append(status, summary);
+    item.append(header);
+
+    if (step.screenshotUrl) {
+      const image = document.createElement("img");
+      image.className = "tool-step-screenshot";
+      image.alt = "Page screenshot after browser action";
+      image.src = step.screenshotUrl;
+      item.append(image);
+    }
+
+    list.append(item);
+  }
+
+  details.append(summary, list);
+  return details;
+}
+
+function updateToolTimeline(article, toolSteps) {
+  let timeline = article.querySelector(".tool-timeline");
+  if (!toolSteps?.length) {
+    timeline?.remove();
+    return;
+  }
+  const nextTimeline = createToolTimeline(toolSteps, Boolean(timeline?.open));
+  if (timeline) timeline.replaceWith(nextTimeline);
+  else article.append(nextTimeline);
 }
 
 function getThinkingSummary(reasoningContent, pending = false) {
@@ -379,6 +447,7 @@ function updateRenderedAssistant(message) {
     }
   }
 
+  updateToolTimeline(article, message.toolSteps);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -388,6 +457,7 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
     const port = chrome.runtime.connect({ name: "chat-stream" });
     activePort = port;
     let settled = false;
+    let stopRequested = false;
 
     const settle = (callback, value) => {
       if (settled) return;
@@ -397,6 +467,14 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         port.disconnect();
       } catch {}
       callback(value);
+    };
+
+    const finishStopped = () => {
+      stopRequested = true;
+      assistantMessage.pending = false;
+      if (!assistantMessage.content.trim()) assistantMessage.content = "Stopped.";
+      updateRenderedAssistant(assistantMessage);
+      settle(resolve);
     };
 
     port.onMessage.addListener((message) => {
@@ -410,12 +488,28 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         updateRenderedAssistant(assistantMessage);
         return;
       }
+      if (message?.type === "tool_step") {
+        assistantMessage.toolSteps ||= [];
+        assistantMessage.toolSteps.push({
+          tool: message.tool || "",
+          arguments: message.arguments || {},
+          summary: message.summary || "",
+          ok: Boolean(message.ok),
+          screenshotUrl: message.screenshotUrl || ""
+        });
+        updateRenderedAssistant(assistantMessage);
+        return;
+      }
       if (message?.type === "done") {
         assistantMessage.content = message.content || assistantMessage.content;
         assistantMessage.reasoningContent = message.reasoningContent || assistantMessage.reasoningContent;
         assistantMessage.pending = false;
         updateRenderedAssistant(assistantMessage);
         settle(resolve);
+        return;
+      }
+      if (message?.type === "stopped") {
+        finishStopped();
         return;
       }
       if (message?.type === "error") {
@@ -425,6 +519,10 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
 
     port.onDisconnect.addListener(() => {
       if (settled) return;
+      if (stopRequested || port.stopRequested) {
+        finishStopped();
+        return;
+      }
       if (assistantMessage.content.trim()) {
         assistantMessage.pending = false;
         updateRenderedAssistant(assistantMessage);
@@ -459,6 +557,8 @@ function setBusy(value) {
   busy = value;
   sendButton.disabled = value;
   promptEl.disabled = value;
+  stopButton.hidden = !value;
+  stopButton.disabled = !value;
   if (!value && activePort) {
     activePort.disconnect();
     activePort = null;

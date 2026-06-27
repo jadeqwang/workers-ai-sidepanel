@@ -4,6 +4,7 @@ body { margin: 0; }
 button, input, textarea { font: inherit; }
 button { border: 0; border-radius: 9px; background: #7c5cff; color: white; padding: 9px 14px; cursor: pointer; font-weight: 650; }
 button:disabled { cursor: wait; opacity: .55; }
+.secondary-button { background: #303640; color: #e8ecf1; }
 textarea, input { width: 100%; border: 1px solid #303640; border-radius: 9px; background: #15191f; color: #f6f8fa; padding: 10px 12px; outline: none; }
 textarea:focus, input:focus { border-color: #866cff; box-shadow: 0 0 0 3px #7c5cff25; }
 .chat-page { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; min-width: 300px; }
@@ -25,6 +26,15 @@ header span { color: #8f99a8; font-size: 11px; }
 .thinking-disclosure { margin-top: 10px; border-top: 1px solid #29313a; padding-top: 8px; color: #aeb6c2; }
 .thinking-disclosure summary { cursor: pointer; font-size: 12px; font-weight: 650; user-select: none; }
 .thinking-content { margin-top: 8px; max-height: 260px; overflow: auto; border-radius: 8px; background: #0f1318; color: #9ba5b3; padding: 10px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.tool-timeline { margin-top: 10px; border-top: 1px solid #29313a; padding-top: 8px; color: #aeb6c2; white-space: normal; }
+.tool-timeline summary { cursor: pointer; font-size: 12px; font-weight: 650; user-select: none; }
+.tool-step-list { display: grid; gap: 8px; margin: 8px 0 0; padding-left: 0; list-style: none; }
+.tool-step { display: grid; gap: 7px; border-radius: 8px; background: #0f1318; padding: 8px; font-size: 12px; line-height: 1.35; }
+.tool-step-header { display: grid; grid-template-columns: 18px 1fr; align-items: start; gap: 6px; }
+.tool-step-status { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #214131; color: #98f2bc; font-size: 11px; font-weight: 800; }
+.tool-step.error .tool-step-status { background: #4a2227; color: #ffb7bd; }
+.tool-step-summary { min-width: 0; overflow-wrap: anywhere; color: #c8d0dc; }
+.tool-step-screenshot { width: 100%; max-height: 180px; object-fit: cover; object-position: top left; border: 1px solid #29313a; border-radius: 6px; background: #0b0d10; }
 .waiting { color: #8f99a8; font-style: italic; }
 #chat-form { border-top: 1px solid #242a32; padding: 12px; }
 .page-context-bar { align-items: center; gap: 8px; margin-bottom: 9px; border: 1px solid #33413a; border-radius: 8px; background: #17231d; color: #afe2c3; padding: 7px 9px; font-size: 11px; }
@@ -41,6 +51,8 @@ header span { color: #8f99a8; font-size: 11px; }
 .intro { color: #9ba5b3; margin: 0 0 24px; }
 .settings-card form { display: grid; gap: 17px; }
 label { display: grid; gap: 7px; color: #cdd3dc; font-size: 13px; }
+.checkbox-row { display: flex; align-items: center; gap: 9px; }
+.checkbox-row input { width: auto; accent-color: #7c5cff; }
 fieldset { display: grid; gap: 14px; border: 1px solid #303640; border-radius: 10px; padding: 15px; }
 legend { color: #9ba5b3; padding: 0 6px; font-size: 12px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
