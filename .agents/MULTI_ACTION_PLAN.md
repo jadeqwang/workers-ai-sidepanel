@@ -63,10 +63,15 @@ Implemented:
 - Tagged fallback parser in `background.js`: handles provider output shaped like
   `<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value>...`, including JSON
   array and numeric argument values, so tag-style tool calls do not leak into chat.
+- Parenthesized tagged fallback parser handles
+  `<tool_call>name(key=value, list=["a","b"])</tool_call>` as seen from GLM fallback output.
+- Dinner Elf tool now prefers structured filters via `requiredFilters`, e.g.
+  `["gluten-free","dairy-free"]`, before falling back to ingredient-name exclusion.
 
 Live browser note: user verified the Dinner Elf prompt works after the planning-loop guard.
-User later exposed a tagged `<tool_call>` fallback shape; parser smoke test passes for it,
-but it still needs one live retry after reloading the extension.
+User later exposed tagged `<tool_call>` fallback shapes; parser smoke tests pass for
+arg-pair and parenthesized forms, but parenthesized parsing still needs one live retry after
+reloading the extension.
 Still test Stop and `wait_for` manually in an unpacked extension run.
 
 ## Next Instance Checklist
@@ -76,6 +81,8 @@ Start from branch `codex/agent-loop-hardening` / commit `1b6a008` or later.
 1. Reload the unpacked extension and run a focused smoke test:
    - Dinner Elf read-only filtering (`get_dinnerelf_dishes`) should answer without visible
      `<think>` leakage, visible `<tool_call>` tags, or "please continue".
+   - Dairy-free requests should use `requiredFilters:["gluten-free","dairy-free"]` when
+     that label is available, rather than relying on dairy ingredient keyword catches.
    - Stop should cancel an in-flight request and leave a clean "Stopped." assistant turn.
    - `wait_for` should succeed on a selector that appears later and time out cleanly on a
      missing selector.

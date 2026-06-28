@@ -336,7 +336,7 @@ function render() {
     label.textContent = message.role === "user" ? "You" : message.role === "error" ? "Error" : "AI";
     const content = document.createElement("div");
     content.className = "message-content";
-    content.textContent = message.content || (message.pending ? "Waiting for answer…" : "");
+    content.textContent = message.content || (message.pending ? "Thinking…" : "");
     article.append(label, content);
     if (message.role === "assistant" && message.reasoningContent) {
       article.append(createThinkingDisclosure(message.reasoningContent, message.pending));
@@ -429,7 +429,7 @@ function updateRenderedAssistant(message) {
   if (!article) return;
 
   const content = article.querySelector(".message-content");
-  if (content) content.textContent = message.content || "Waiting for answer…";
+  if (content) content.textContent = message.content || (message.pending ? "Thinking…" : "");
 
   let disclosure = article.querySelector(".thinking-disclosure");
   if (!disclosure && message.reasoningContent) {

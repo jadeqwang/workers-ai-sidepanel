@@ -115,7 +115,8 @@ const BROWSER_TOOL_DEFINITIONS = [
         type: "object",
         properties: {
           requiredFilter: { type: "string", description: "Only include dishes whose Filters contain this text, e.g. 'gluten-free'." },
-          excludeIngredients: { type: "array", items: { type: "string" }, description: "Drop dishes whose ingredients contain any of these terms." },
+          requiredFilters: { type: "array", items: { type: "string" }, description: "Only include dishes whose Filters contain all of these labels, e.g. ['gluten-free', 'dairy-free']." },
+          excludeIngredients: { type: "array", items: { type: "string" }, description: "Fallback ingredient-name screening when a structured filter label is unavailable." },
           offset: { type: "integer", minimum: 0, description: "Result offset." },
           limit: { type: "integer", minimum: 1, maximum: 30, description: "Maximum dishes to return." }
         }
@@ -802,7 +803,7 @@ Available read-only browser tools:
 - inspect_elements: {"selector":"CSS selector","limit":20} reads matching elements.
 - wait_for: {"selector":"CSS selector","timeoutMs":5000,"visible":true} waits for an element before acting on dynamic pages.
 - hover_element: {"selector":"CSS selector","index":0} hovers one element and reads visible tooltip text.
-- get_dinnerelf_dishes: {"requiredFilter":"gluten-free","excludeIngredients":["milk","cream","butter","cheese","cheddar","parmesan","mozzarella","yogurt","sour cream","whey","casein"],"offset":0,"limit":20} returns structured Dinner Elf dishes. Use this tool on Dinner Elf instead of reading the whole page. Ingredient exclusions produce candidates, not medical allergy guarantees.
+- get_dinnerelf_dishes: {"requiredFilters":["gluten-free","dairy-free"],"offset":0,"limit":20} returns structured Dinner Elf dishes. Use structured Filters such as dairy-free before ingredient exclusions. Ingredient exclusions are only a fallback and produce candidates, not medical allergy guarantees.
 ${controlEnabled ? `
 Browser control is enabled for this attached page. Available browser control tools:
 - click_element: {"selector":"CSS selector","index":0} clicks one matching element.
@@ -867,6 +868,10 @@ function parseTaggedToolCall(content) {
 
   const body = match[1].trim();
   const firstArgIndex = body.search(/<arg_key>/i);
+  if (firstArgIndex < 0) {
+    const parenthesized = parseParenthesizedToolCall(body);
+    if (parenthesized) return parenthesized;
+  }
   const rawTool = firstArgIndex >= 0 ? body.slice(0, firstArgIndex) : body;
   const tool = decodeHtmlEntities(rawTool.replace(/<[^>]+>/g, "")).trim();
   if (!tool) return null;
@@ -883,12 +888,60 @@ function parseTaggedToolCall(content) {
   return { tool, arguments: argumentsObject };
 }
 
+function parseParenthesizedToolCall(body) {
+  const decoded = decodeHtmlEntities(String(body || "").trim());
+  const match = decoded.match(/^([A-Za-z_][\w.-]*)\s*\(([\s\S]*)\)\s*$/);
+  if (!match) return null;
+  const argumentsObject = {};
+  for (const part of splitTopLevelArguments(match[2])) {
+    const separatorIndex = part.indexOf("=");
+    if (separatorIndex <= 0) continue;
+    const key = part.slice(0, separatorIndex).trim();
+    if (!key) continue;
+    argumentsObject[key] = parseTaggedArgumentValue(part.slice(separatorIndex + 1).trim());
+  }
+  return { tool: match[1], arguments: argumentsObject };
+}
+
+function splitTopLevelArguments(content) {
+  const parts = [];
+  let start = 0;
+  let bracketDepth = 0;
+  let quote = "";
+  let escaped = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "[" || char === "{" || char === "(") bracketDepth++;
+    else if (char === "]" || char === "}" || char === ")") bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === "," && bracketDepth === 0) {
+      parts.push(content.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  const last = content.slice(start).trim();
+  if (last) parts.push(last);
+  return parts;
+}
+
 function parseTaggedArgumentValue(rawValue) {
   const value = decodeHtmlEntities(String(rawValue || "").trim());
   if (!value) return "";
   try {
     return JSON.parse(value);
   } catch {}
+  if (/^'.*'$/.test(value)) return value.slice(1, -1);
   if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
   if (/^(?:true|false)$/i.test(value)) return value.toLowerCase() === "true";
   if (/^null$/i.test(value)) return null;
@@ -1162,7 +1215,11 @@ async function runBrowserTool(tool, args) {
 
   if (tool === "get_dinnerelf_dishes") {
     if (!location.hostname.endsWith("dinnerelf.com")) return { error: "This tool is only available on dinnerelf.com" };
-    const requiredFilter = normalize(args.requiredFilter).toLowerCase();
+    const requiredFilters = [
+      normalize(args.requiredFilter),
+      ...(Array.isArray(args.requiredFilters) ? args.requiredFilters.map((item) => normalize(item)) : [])
+    ].map((item) => item.toLowerCase()).filter(Boolean).slice(0, 10);
+    const usesDairyFreeFilter = requiredFilters.some((filter) => /dairy[\s-]*free/.test(filter));
     const exclusions = Array.isArray(args.excludeIngredients)
       ? args.excludeIngredients.map((item) => normalize(item).toLowerCase()).filter(Boolean).slice(0, 30)
       : [];
@@ -1173,8 +1230,9 @@ async function runBrowserTool(tool, args) {
       const filters = (lines.find((line) => line.startsWith("Filters:")) || "").replace(/^Filters:\s*/, "");
       const ingredients = (lines.find((line) => line.startsWith("Ingredients:")) || "").replace(/^Ingredients:\s*/, "");
       if (!name) continue;
-      if (requiredFilter && !filters.toLowerCase().includes(requiredFilter)) continue;
-      const matchedExclusions = exclusions.filter((term) => ingredients.toLowerCase().includes(term));
+      const normalizedFilters = filters.toLowerCase();
+      if (requiredFilters.some((filter) => !normalizedFilters.includes(filter))) continue;
+      const matchedExclusions = usesDairyFreeFilter ? [] : exclusions.filter((term) => ingredients.toLowerCase().includes(term));
       if (matchedExclusions.length) continue;
       dishes.push({ name, filters, ingredients });
     }
@@ -1184,8 +1242,12 @@ async function runBrowserTool(tool, args) {
       totalMatched: dishes.length,
       offset,
       returned: dishes.slice(offset, offset + limit),
+      requiredFilters,
       excludedIngredientTerms: exclusions,
-      caution: "Ingredient-name screening can miss derivatives, substitutions, and cross-contact."
+      screeningMode: usesDairyFreeFilter ? "structured filters" : "ingredient exclusions",
+      caution: usesDairyFreeFilter
+        ? "Structured Dinner Elf filters were used; verify with the provider for medical allergy needs."
+        : "Ingredient-name screening can miss derivatives, substitutions, and cross-contact."
     };
   }
 
