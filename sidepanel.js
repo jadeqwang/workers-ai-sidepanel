@@ -39,6 +39,7 @@ form.addEventListener("submit", async (event) => {
     content: "",
     reasoningContent: "",
     toolSteps: [],
+    pendingApproval: null,
     pending: true
   };
   messages.push(assistantMessage);
@@ -365,6 +366,9 @@ function render() {
     if (message.role === "assistant" && Array.isArray(message.toolSteps) && message.toolSteps.length) {
       article.append(createToolTimeline(message.toolSteps));
     }
+    if (message.role === "assistant" && message.pendingApproval) {
+      article.append(createApprovalCard(message.pendingApproval));
+    }
     messagesEl.append(article);
   }
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -438,6 +442,78 @@ function updateToolTimeline(article, toolSteps) {
   else article.append(nextTimeline);
 }
 
+function createApprovalCard(approval) {
+  const card = document.createElement("section");
+  card.className = "approval-card";
+
+  const title = document.createElement("strong");
+  title.className = "approval-title";
+  title.textContent = approval.title || "Approve browser action";
+
+  const detail = document.createElement("p");
+  detail.className = "approval-detail";
+  detail.textContent = approval.detail || "The assistant wants to run a browser action that needs your approval.";
+
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "secondary-button";
+  reject.textContent = "Reject";
+  reject.addEventListener("click", () => respondToApproval(approval, false, card));
+
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.textContent = "Approve";
+  approve.addEventListener("click", () => respondToApproval(approval, true, card));
+
+  actions.append(reject, approve);
+  card.append(title, detail, actions);
+  return card;
+}
+
+async function respondToApproval(approval, approved, card) {
+  if (!activePort || !approval?.id) return;
+  const buttons = card.querySelectorAll("button");
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+
+  let permissionGranted = true;
+  let reason = "";
+  if (approved && approval.permissionPattern) {
+    try {
+      permissionGranted = await chrome.permissions.request({ origins: [approval.permissionPattern] });
+      if (!permissionGranted) reason = "Chrome permission was not granted.";
+    } catch (error) {
+      permissionGranted = false;
+      reason = error.message || "Chrome permission request failed.";
+    }
+  }
+
+  try {
+    activePort.postMessage({
+      type: "approval_response",
+      id: approval.id,
+      approved,
+      permissionGranted,
+      reason
+    });
+  } catch {}
+}
+
+function updateApprovalCard(article, approval) {
+  let card = article.querySelector(".approval-card");
+  if (!approval) {
+    card?.remove();
+    return;
+  }
+  const nextCard = createApprovalCard(approval);
+  if (card) card.replaceWith(nextCard);
+  else article.append(nextCard);
+}
+
 function getThinkingSummary(reasoningContent, pending = false) {
   const count = reasoningContent.length;
   if (count) return `Thinking${pending ? "…" : ""} ${count.toLocaleString()} chars`;
@@ -469,6 +545,7 @@ function updateRenderedAssistant(message) {
   }
 
   updateToolTimeline(article, message.toolSteps);
+  updateApprovalCard(article, message.pendingApproval);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -511,6 +588,7 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
       }
       if (message?.type === "tool_step") {
         assistantMessage.toolSteps ||= [];
+        assistantMessage.pendingApproval = null;
         assistantMessage.toolSteps.push({
           tool: message.tool || "",
           arguments: message.arguments || {},
@@ -521,7 +599,21 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         updateRenderedAssistant(assistantMessage);
         return;
       }
+      if (message?.type === "approval_request") {
+        assistantMessage.pendingApproval = {
+          id: message.id || "",
+          title: message.title || "Approve browser action",
+          detail: message.detail || "",
+          tool: message.tool || "",
+          arguments: message.arguments || {},
+          permissionOrigin: message.permissionOrigin || "",
+          permissionPattern: message.permissionPattern || ""
+        };
+        updateRenderedAssistant(assistantMessage);
+        return;
+      }
       if (message?.type === "done") {
+        assistantMessage.pendingApproval = null;
         assistantMessage.content = message.content || assistantMessage.content;
         assistantMessage.reasoningContent = message.reasoningContent || assistantMessage.reasoningContent;
         assistantMessage.pending = false;
@@ -530,6 +622,7 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         return;
       }
       if (message?.type === "stopped") {
+        assistantMessage.pendingApproval = null;
         finishStopped();
         return;
       }

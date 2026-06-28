@@ -22,7 +22,8 @@ const CONTROL_TOOLS = new Set([
   "press_key",
   "submit_form",
   "scroll_page",
-  "navigate_url"
+  "navigate_url",
+  "open_url"
 ]);
 // Cap how many tool calls a single assistant turn may execute, so one
 // hallucinated turn cannot fire a long chain of actions before the loop sees
@@ -258,6 +259,22 @@ const BROWSER_TOOL_DEFINITIONS = [
         required: ["url"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "open_url",
+      description: "Open an http(s) URL in this tab or a new tab, including cross-origin destinations.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Absolute URL, or a URL relative to the attached page." },
+          newTab: { type: "boolean", description: "Open in a new tab instead of replacing the attached tab." },
+          active: { type: "boolean", description: "Whether a new tab should be focused. Defaults to true." }
+        },
+        required: ["url"]
+      }
+    }
   }
 ];
 
@@ -357,9 +374,23 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "chat-stream") return;
 
   let abortController;
+  let pendingApproval = null;
   port.onMessage.addListener((message) => {
     if (message?.type === "cancel") {
+      pendingApproval?.resolve({ approved: false, reason: "The request was stopped." });
+      pendingApproval = null;
       abortController?.abort();
+      return;
+    }
+    if (message?.type === "approval_response") {
+      if (pendingApproval?.id === message.id) {
+        pendingApproval.resolve({
+          approved: Boolean(message.approved),
+          reason: message.reason || "",
+          permissionGranted: message.permissionGranted !== false
+        });
+        pendingApproval = null;
+      }
       return;
     }
     if (message?.type !== "chat") return;
@@ -373,7 +404,12 @@ chrome.runtime.onConnect.addListener((port) => {
       signal: abortController.signal,
       onReasoningDelta: (text) => port.postMessage({ type: "reasoning_delta", text }),
       onContentDelta: (text) => port.postMessage({ type: "content_delta", text }),
-      onToolStep: (step) => port.postMessage({ type: "tool_step", ...step })
+      onToolStep: (step) => port.postMessage({ type: "tool_step", ...step }),
+      requestApproval: (request) => new Promise((resolve) => {
+        const id = crypto.randomUUID();
+        pendingApproval = { id, resolve };
+        port.postMessage({ type: "approval_request", id, ...request });
+      })
     })
       .then((result) => port.postMessage({ type: "done", ...result }))
       .catch((error) => {
@@ -386,10 +422,15 @@ chrome.runtime.onConnect.addListener((port) => {
         port.postMessage({ type: "error", error: error.message });
       })
       .finally(() => {
+        pendingApproval = null;
         clearInterval(keepAlive);
       });
   });
-  port.onDisconnect.addListener(() => abortController?.abort());
+  port.onDisconnect.addListener(() => {
+    pendingApproval?.resolve({ approved: false, reason: "The side panel disconnected." });
+    pendingApproval = null;
+    abortController?.abort();
+  });
 });
 
 async function requestCompletion(messages, pageContext, stream = {}) {
@@ -461,6 +502,39 @@ async function requestCompletion(messages, pageContext, stream = {}) {
     const executed = [];
     for (const call of limitedCalls) {
       throwIfAborted(stream.signal);
+      const approval = buildApprovalRequest(pageContext, call);
+      if (approval) {
+        if (!stream.requestApproval) {
+          throw new Error(`Approval is required before ${approval.title.toLowerCase()}.`);
+        }
+        const decision = await stream.requestApproval(approval);
+        throwIfAborted(stream.signal);
+        if (!decision?.approved) {
+          const reason = decision?.reason ? ` ${decision.reason}` : "";
+          const toolResult = { error: `User rejected ${call.tool}.${reason}`.trim(), approvalRejected: true };
+          stream.onToolStep?.({
+            tool: call.tool,
+            arguments: call.arguments,
+            summary: summarizeToolStep(call.tool, call.arguments, toolResult),
+            ok: false,
+            screenshotUrl: ""
+          });
+          executed.push({ call, toolResult });
+          continue;
+        }
+        if (decision.permissionGranted === false) {
+          const toolResult = { error: `Chrome permission was not granted for ${approval.permissionOrigin || "the destination"}.` };
+          stream.onToolStep?.({
+            tool: call.tool,
+            arguments: call.arguments,
+            summary: summarizeToolStep(call.tool, call.arguments, toolResult),
+            ok: false,
+            screenshotUrl: ""
+          });
+          executed.push({ call, toolResult });
+          continue;
+        }
+      }
       const toolResult = await executeBrowserTool(pageContext.tabId, { tool: call.tool, arguments: call.arguments });
       throwIfAborted(stream.signal);
       const screenshotUrl = config.showToolScreenshots && CONTROL_TOOLS.has(call.tool)
@@ -852,8 +926,9 @@ Browser control is enabled for this attached page. Available browser control too
 - submit_form: {"selector":"CSS selector","index":0} submits a matching form or the closest form for a matching field/button.
 - scroll_page: {"x":0,"y":600} scrolls the page by pixels.
 - navigate_url: {"url":"/path-or-same-origin-url"} navigates this tab within the current origin.
+- open_url: {"url":"https://example.com/","newTab":false} opens an http(s) URL, including cross-origin destinations, in this tab or a new tab.
 
-Do not use browser control tools for purchases, payments, account deletion, publishing, sending messages, sharing personal data, changing credentials, or other irreversible/sensitive actions. For those, explain the action and ask the user to do or approve it manually.` : `
+Sensitive actions such as form submission, cross-origin navigation, and purchase/payment-like clicks require explicit user approval before execution. Do not use browser control tools for account deletion, publishing, sending messages, sharing personal data, changing credentials, or other irreversible actions unless the user explicitly asked for that exact operation and can approve it in the side panel.` : `
 Browser control is disabled. Do not request click, type, submit, scroll, keypress, or navigation tools. Ask the user to turn on Control if they want you to operate the page.`}
 
 Use tools only when needed. After receiving enough tool results, answer the user's question normally, not as JSON.`;
@@ -876,7 +951,8 @@ function parseToolCall(content) {
     "press_key",
     "submit_form",
     "scroll_page",
-    "navigate_url"
+    "navigate_url",
+    "open_url"
   ]);
   return allowed.has(value.tool) ? value : null;
 }
@@ -1054,6 +1130,10 @@ function extractJsonObjectCandidates(text) {
 }
 
 async function executeBrowserTool(tabId, toolCall) {
+  if (toolCall.tool === "open_url") {
+    return openUrlInBrowser(tabId, toolCall.arguments || {});
+  }
+
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
     func: runBrowserTool,
@@ -1061,6 +1141,92 @@ async function executeBrowserTool(tabId, toolCall) {
   });
   if (!injection) throw new Error("The browser tool did not return a result.");
   return injection.result;
+}
+
+async function openUrlInBrowser(tabId, args = {}) {
+  const rawUrl = String(args.url || "").slice(0, 2000);
+  if (!rawUrl) return { error: "url is required" };
+  let nextUrl;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    nextUrl = new URL(rawUrl, tab.url || undefined);
+  } catch (error) {
+    return { error: `Invalid URL: ${error.message}` };
+  }
+  if (!/^https?:$/.test(nextUrl.protocol)) {
+    return { error: "Only http(s) URLs can be opened.", url: nextUrl.href };
+  }
+
+  if (args.newTab) {
+    const tab = await chrome.tabs.create({ url: nextUrl.href, active: args.active !== false });
+    return { ok: true, action: "opened", url: nextUrl.href, tabId: tab.id, newTab: true };
+  }
+
+  const tab = await chrome.tabs.update(tabId, { url: nextUrl.href });
+  return { ok: true, action: "opened", url: nextUrl.href, tabId: tab.id, newTab: false };
+}
+
+function buildApprovalRequest(pageContext, call) {
+  if (!CONTROL_TOOLS.has(call.tool)) return null;
+  const args = call.arguments || {};
+  if (call.tool === "submit_form") {
+    return {
+      title: "Submit form",
+      detail: `Submit the form matching ${String(args.selector || "the selected element").slice(0, 160)}.`,
+      tool: call.tool,
+      arguments: args
+    };
+  }
+
+  if (call.tool === "open_url") {
+    const info = getOpenUrlApprovalInfo(pageContext, args);
+    if (!info?.crossOrigin) return null;
+    return {
+      title: info.crossOrigin ? "Open cross-origin URL" : "Open URL",
+      detail: `${args.newTab ? "Open a new tab at" : "Navigate this tab to"} ${info.url}.`,
+      tool: call.tool,
+      arguments: args,
+      permissionOrigin: info.permissionOrigin,
+      permissionPattern: info.permissionPattern
+    };
+  }
+
+  if (call.tool === "click_element" && isPurchaseLikeClick(args)) {
+    return {
+      title: "Approve sensitive click",
+      detail: `Click ${String(args.selector || "the selected element").slice(0, 160)}. This looks purchase, payment, checkout, or confirmation related.`,
+      tool: call.tool,
+      arguments: args
+    };
+  }
+
+  return null;
+}
+
+function getOpenUrlApprovalInfo(pageContext, args = {}) {
+  const rawUrl = String(args.url || "").slice(0, 2000);
+  if (!rawUrl) return null;
+  try {
+    const currentUrl = new URL(pageContext?.url || "http://example.invalid/");
+    const nextUrl = new URL(rawUrl, currentUrl.href);
+    if (!/^https?:$/.test(nextUrl.protocol)) return null;
+    const crossOrigin = nextUrl.origin !== currentUrl.origin;
+    return {
+      url: nextUrl.href,
+      crossOrigin,
+      permissionOrigin: nextUrl.origin,
+      permissionPattern: `${nextUrl.origin}/*`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPurchaseLikeClick(args = {}) {
+  const haystack = [args.selector, args.text, args.label, args.description]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  return /\b(buy|purchase|checkout|cart|pay|payment|place[-_\s]*order|order[-_\s]*now|subscribe|confirm|delete|remove[-_\s]*account)\b/.test(haystack);
 }
 
 async function captureToolStepScreenshot(tabId) {
@@ -1090,6 +1256,7 @@ function summarizeToolStep(tool, args = {}, result = {}) {
   if (tool === "submit_form") return `Submitted form ${String(target).slice(0, 100)}`;
   if (tool === "scroll_page") return `Scrolled to ${Number(result.scrollY || 0).toLocaleString()}px`;
   if (tool === "navigate_url") return `Navigated to ${String(result.url || args.url || "").slice(0, 140)}`;
+  if (tool === "open_url") return `${result.newTab ? "Opened new tab" : "Opened URL"} ${String(result.url || args.url || "").slice(0, 140)}`;
   return `${tool} completed`;
 }
 

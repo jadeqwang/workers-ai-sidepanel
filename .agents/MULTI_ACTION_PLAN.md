@@ -90,23 +90,28 @@ Start from branch `codex/agent-loop-hardening` / commit `1b6a008` or later.
      missing selector.
    - Optional screenshots should render in the browser-action timeline when
      `showToolScreenshots` is enabled.
+   - `open_url` should navigate same-origin without approval, pause for approval before
+     cross-origin navigation, request the destination host permission, and support `newTab`.
+   - Approval gates should pause before `submit_form` and purchase/payment-like
+     `click_element` selectors; Reject should return a tool error and let the model answer.
 2. Open a PR from `codex/agent-loop-hardening` to `main`. The local machine does not have
    `gh`; previous GitHub connector PR creation failed with `403 Resource not accessible by
    integration`, so use the browser URL if needed:
    `https://github.com/jadeqwang/workers-ai-sidepanel/pull/new/codex/agent-loop-hardening`.
-3. If continuing implementation, Phase 3 is next: cross-origin/new-tab `open_url`, then
-   hard human approval gates for sensitive actions.
+3. If continuing implementation, live-test Phase 3 in an unpacked extension run, then refine
+   the sensitive-click heuristics or make the risk set configurable if needed.
 
-### Phase 3 — Reach & safety
-- **Cross-origin / multi-tab navigation**: `navigate_url` is same-origin only
-  (`background.js`). Add a background-driven `open_url` using `chrome.tabs.update` /
-  `tabs.create` that can cross origins, requesting host permission like `addPageButton`
-  does in `sidepanel.js` (~line 90). This is a CONTROL_TOOL.
-- **Hard human-in-the-loop approval**: today sensitive actions are only discouraged by
-  prompt text in `buildBrowserAgentPrompt`. Add a per-action confirm gate in the side panel
-  for a configurable risk set (submit_form, navigate cross-origin, purchase-like clicks):
-  the loop pauses and waits for an Approve/Reject message over the port before calling
-  `executeBrowserTool`. Replace/augment the current hard-throw control gate.
+### Phase 3 — Reach & safety ✅ IMPLEMENTED, LIVE TEST PENDING
+- **Cross-origin / multi-tab navigation**: `navigate_url` remains same-origin only inside
+  the injected page tool, and `background.js` now has a background-only `open_url` control
+  tool using `chrome.tabs.update` / `chrome.tabs.create`. Cross-origin `open_url` requests
+  destination host permission during side-panel approval; same-origin `open_url` does not
+  require approval.
+- **Hard human-in-the-loop approval**: sensitive actions now pause the streaming loop and
+  wait for an Approve/Reject response from the side panel before execution. Current gated
+  set: `submit_form`, cross-origin `open_url`, and `click_element` calls whose selector/text
+  hints look purchase/payment/checkout/confirmation related. Rejections are echoed back as
+  tool errors so the model can explain what happened instead of silently failing.
 
 ### Phase 4 — Generalize structured-label filtering (de-Dinner-Elf-ify)
 
