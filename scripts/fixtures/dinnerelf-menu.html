@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  Minimal Dinner Elf menu fixture mirroring the DOM shape the dinnerelf preset
+  targets (container ".pick_maindis .adj_pos_hit_second", name ".pro_img_txt
+  .taphover", label lines ".tooltip p" with "Filters:"/"Ingredients:" prefixes).
+  Used by the live/jsdom DOM-level verification described in
+  .agents/MULTI_ACTION_PLAN.md (Phase 4 verification).
+-->
+<html>
+  <head><meta charset="utf-8" /><title>Dinner Elf Menu (fixture)</title></head>
+  <body>
+    <div class="pick_maindis">
+      <div class="adj_pos_hit_second">
+        <div class="pro_img_txt"><span class="taphover">Dairy-Free Mashed Potatoes</span></div>
+        <div class="tooltip">
+          <p>Filters: gluten-free, dairy-free</p>
+          <p>Ingredients: potato, dairy-free butter substitute, salt, pepper</p>
+        </div>
+      </div>
+      <div class="adj_pos_hit_second">
+        <div class="pro_img_txt"><span class="taphover">Cheesy Baked Pasta</span></div>
+        <div class="tooltip">
+          <p>Filters: vegetarian</p>
+          <p>Ingredients: wheat pasta, cheddar cheese, cream, butter</p>
+        </div>
+      </div>
+      <div class="adj_pos_hit_second">
+        <div class="pro_img_txt"><span class="taphover">Peanut Sesame Noodles</span></div>
+        <div class="tooltip">
+          <p>Filters: dairy-free</p>
+          <p>Ingredients: rice noodles, peanut, soy sauce, sesame</p>
+        </div>
+      </div>
+      <div class="adj_pos_hit_second">
+        <div class="pro_img_txt"><span class="taphover">Plain Steamed Rice</span></div>
+        <div class="tooltip">
+          <p>Filters: gluten-free, dairy-free, nut-free, vegan</p>
+          <p>Ingredients: rice, water, salt</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

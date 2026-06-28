@@ -1,3 +1,5 @@
+import { SITE_PRESETS } from "./site-presets.js";
+
 const messagesEl = document.querySelector("#messages");
 const form = document.querySelector("#chat-form");
 const promptEl = document.querySelector("#prompt");
@@ -105,7 +107,8 @@ addPageButton.addEventListener("click", async () => {
 
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: extractPageContext
+      func: extractPageContext,
+      args: [SITE_PRESETS]
     });
     if (!injection?.result?.text) throw new Error("No readable page text was found.");
 
@@ -213,7 +216,7 @@ function installHoverRecorder() {
   }, true);
 }
 
-function extractPageContext() {
+function extractPageContext(presets) {
   const maximumLength = 30000;
   const normalize = (value) => String(value || "")
     .replace(/\u00a0/g, " ")
@@ -222,19 +225,34 @@ function extractPageContext() {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   const visibleText = normalize(document.body?.innerText);
-  const isDinnerElfMenu = location.hostname.endsWith("dinnerelf.com") &&
-    location.hash.startsWith("#/main_swap");
-  const dinnerElfDishes = [];
+  // Preset-driven structured-record pre-extraction. Presets are passed in (plain
+  // data) because this function is injected via executeScript and cannot close
+  // over module imports. Matches the same hostname/requireHash gate the tools use.
+  const preset = (Array.isArray(presets) ? presets : []).find((entry) =>
+    location.hostname.endsWith(entry.hostnameSuffix) &&
+    (!entry.requireHash || location.hash.startsWith(entry.requireHash)));
+  const presetRecords = [];
 
-  if (isDinnerElfMenu) {
-    for (const card of document.querySelectorAll(".pick_maindis .adj_pos_hit_second")) {
-      const name = normalize(card.querySelector(".pro_img_txt .taphover")?.textContent);
-      const tooltipLines = Array.from(card.querySelectorAll(".tooltip p"))
-        .map((element) => normalize(element.textContent));
-      const filters = tooltipLines.find((line) => line.startsWith("Filters:"));
-      const ingredients = tooltipLines.find((line) => line.startsWith("Ingredients:"));
-      if (name && (filters || ingredients)) {
-        dinnerElfDishes.push([`Dish: ${name}`, filters, ingredients].filter(Boolean).join("\n"));
+  if (preset) {
+    const noun = String(preset.recordNoun || "record");
+    const nounTitle = noun.charAt(0).toUpperCase() + noun.slice(1);
+    for (const card of document.querySelectorAll(preset.container)) {
+      const name = preset.nameSelector
+        ? normalize(card.querySelector(preset.nameSelector)?.textContent)
+        : normalize(card.innerText).split("\n")[0];
+      const lines = preset.lineSelector
+        ? Array.from(card.querySelectorAll(preset.lineSelector)).map((element) => normalize(element.textContent))
+        : [];
+      const fieldLines = (Array.isArray(preset.fields) ? preset.fields : []).map((field) => {
+        if (field.prefix) {
+          const prefix = String(field.prefix);
+          return lines.find((line) => line.toLowerCase().startsWith(prefix.toLowerCase())) || "";
+        }
+        if (field.selector) return normalize(card.querySelector(field.selector)?.textContent);
+        return "";
+      }).filter(Boolean);
+      if (name && fieldLines.length) {
+        presetRecords.push([`${nounTitle}: ${name}`, ...fieldLines].join("\n"));
       }
     }
   }
@@ -280,15 +298,17 @@ function extractPageContext() {
   }
 
   const supplementalText = supplemental.join("\n");
-  const dinnerElfText = dinnerElfDishes.join("\n\n");
+  const presetText = presetRecords.join("\n\n");
   let combinedText;
   let truncated;
 
-  if (dinnerElfText) {
-    const dinnerElfLimit = 8000;
-    const dishSection = `DINNER ELF DISH DETAILS (${dinnerElfDishes.length} dishes):\n${dinnerElfText}`;
-    combinedText = dishSection.slice(0, dinnerElfLimit);
-    truncated = dishSection.length > dinnerElfLimit;
+  if (preset && presetText) {
+    const recordLimit = 8000;
+    const nounPlural = String(preset.recordNounPlural || `${preset.recordNoun || "record"}s`);
+    const sectionLabel = String(preset.sectionLabel || `${nounPlural.toUpperCase()} DETAILS`);
+    const recordSection = `${sectionLabel} (${presetRecords.length} ${nounPlural}):\n${presetText}`;
+    combinedText = recordSection.slice(0, recordLimit);
+    truncated = recordSection.length > recordLimit;
   } else {
     const visibleLimit = 20000;
     combinedText = [
@@ -303,7 +323,8 @@ function extractPageContext() {
     url: location.href,
     text: combinedText,
     truncated,
-    extractedDishCount: dinnerElfDishes.length
+    extractedRecordCount: presetRecords.length,
+    extractedRecordNoun: preset ? String(preset.recordNounPlural || `${preset.recordNoun || "record"}s`) : ""
   };
 }
 
@@ -315,7 +336,7 @@ function renderPageContext() {
   controlPageButton.setAttribute("aria-pressed", String(Boolean(pageContext?.browserControl)));
   controlPageButton.textContent = pageContext?.browserControl ? "Control on" : "Control off";
   pageContextLabel.textContent = pageContext
-    ? `${pageContext.extractedDishCount ? `${pageContext.extractedDishCount} dishes · ` : hoverDetails.size ? `${hoverDetails.size} hover capture${hoverDetails.size === 1 ? "" : "s"} · ` : ""}${pageContext.title}${pageContext.truncated ? " (excerpt)" : ""}`
+    ? `${pageContext.extractedRecordCount ? `${pageContext.extractedRecordCount} ${pageContext.extractedRecordNoun || "records"} · ` : hoverDetails.size ? `${hoverDetails.size} hover capture${hoverDetails.size === 1 ? "" : "s"} · ` : ""}${pageContext.title}${pageContext.truncated ? " (excerpt)" : ""}`
     : "";
 }
 
