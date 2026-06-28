@@ -489,7 +489,7 @@ async function requestCompletion(messages, pageContext, stream = {}) {
     }
 
     if (step === maxToolSteps - 1) {
-      throw new Error(`The model exceeded the ${maxToolSteps}-step browser tool limit.`);
+      return finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream);
     }
 
     const limitedCalls = calls.slice(0, MAX_ACTIONS_PER_TURN);
@@ -554,6 +554,30 @@ async function requestCompletion(messages, pageContext, stream = {}) {
   }
 
   throw new Error("The browser tool loop ended without an answer.");
+}
+
+async function finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream = {}) {
+  throwIfAborted(stream.signal);
+  const finalPrompt = {
+    role: "user",
+    content: `You have reached the ${maxToolSteps}-step browser tool limit. Do not call any more browser tools. Use the page data and browser tool results already provided in this conversation to answer the user's original request now. If the available data is incomplete, answer with what you can determine and say what could not be verified.`
+  };
+  const result = await requestModelWithFallback(
+    config,
+    [...workingMessages, finalPrompt],
+    Number(config.maxTokens),
+    { signal: stream.signal }
+  );
+  if (result.reasoningContent) reasoningParts.push(result.reasoningContent);
+  const finalContent = stripLeakedThinking(result.content);
+  if (!finalContent.trim()) {
+    throw new Error(`The model reached the ${maxToolSteps}-step browser tool limit and did not provide a final answer.`);
+  }
+  stream.onContentDelta?.(finalContent);
+  return {
+    content: finalContent,
+    reasoningContent: reasoningParts.join("\n\n")
+  };
 }
 
 function getPrimaryProvider(config) {
