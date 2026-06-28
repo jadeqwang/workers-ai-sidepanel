@@ -65,13 +65,15 @@ Implemented:
   array and numeric argument values, so tag-style tool calls do not leak into chat.
 - Parenthesized tagged fallback parser handles
   `<tool_call>name(key=value, list=["a","b"])</tool_call>` as seen from GLM fallback output.
+- Bare function-call fallback parser handles `name({"key":"value"})` when a provider ignores
+  the requested JSON wrapper and emits plain call syntax.
 - Dinner Elf tool now prefers structured filters via `requiredFilters`, e.g.
   `["gluten-free","dairy-free"]`, before falling back to ingredient-name exclusion.
 
 Live browser note: user verified the Dinner Elf prompt works after the planning-loop guard.
-User later exposed tagged `<tool_call>` fallback shapes; parser smoke tests pass for
-arg-pair and parenthesized forms, but parenthesized parsing still needs one live retry after
-reloading the extension.
+User later exposed tagged `<tool_call>` and bare `name({...})` fallback shapes; parser smoke
+tests pass, but the latest bare-call parser still needs one live retry after reloading the
+extension.
 Still test Stop and `wait_for` manually in an unpacked extension run.
 
 ## Next Instance Checklist
