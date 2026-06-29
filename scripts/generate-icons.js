@@ -98,21 +98,62 @@ function strokeLine(ax, ay, bx, by, width, color) {
   }
 }
 
+function pointInPolygon(px, py, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i];
+    const [xj, yj] = points[j];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function fillPolygon(points, color) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of points) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  const sx = Math.floor(minX * scale);
+  const sy = Math.floor(minY * scale);
+  const ex = Math.ceil(maxX * scale);
+  const ey = Math.ceil(maxY * scale);
+  for (let y = sy; y < ey; y++) {
+    for (let x = sx; x < ex; x++) {
+      const vx = (x + 0.5) / scale;
+      const vy = (y + 0.5) / scale;
+      if (pointInPolygon(vx, vy, points)) blendPixel(x, y, color);
+    }
+  }
+}
+
+// Four-point sparkle (AI "spark") centered at (cx, cy).
+function sparklePoints(cx, cy, outer, inner) {
+  const d = inner * Math.SQRT1_2;
+  return [
+    [cx, cy - outer],
+    [cx + d, cy - d],
+    [cx + outer, cy],
+    [cx + d, cy + d],
+    [cx, cy + outer],
+    [cx - d, cy + d],
+    [cx - outer, cy],
+    [cx - d, cy - d]
+  ];
+}
+
 function renderSource() {
-  fillRoundedRect(0, 0, 128, 128, 28, rgba("#0a0f15"));
-  fillRoundedRect(6, 5, 116, 116, 25, rgba("#17222d"));
-  fillRoundedRect(12, 12, 104, 104, 22, rgba("#0b1016"));
-  strokeRoundedRect(23, 25, 82, 78, 13, 5, rgba("#4fd1d9"));
-  fillRoundedRect(31, 36, 42, 8, 4, rgba("#f8fbff", 245));
-  fillRoundedRect(31, 52, 34, 6, 3, rgba("#9fb1c3", 230));
-  fillRoundedRect(31, 65, 38, 6, 3, rgba("#9fb1c3", 185));
-  fillRoundedRect(78, 25, 27, 78, 12, rgba("#f48120"));
-  fillRoundedRect(85, 40, 13, 47, 6.5, rgba("#101720"));
-  strokeLine(52, 76, 68, 62, 6, rgba("#4fd1d9"));
-  strokeLine(68, 62, 85, 75, 6, rgba("#4fd1d9"));
-  strokeCircle(52, 76, 8, 4, rgba("#4fd1d9"), rgba("#f8fbff"));
-  strokeCircle(68, 62, 8, 4, rgba("#4fd1d9"), rgba("#f8fbff"));
-  strokeCircle(85, 75, 8, 4, rgba("#f48120"), rgba("#f8fbff"));
+  // Dark rounded tile with a subtly lighter inner face for depth.
+  fillRoundedRect(0, 0, 128, 128, 28, rgba("#0d1620"));
+  fillRoundedRect(6, 6, 116, 116, 23, rgba("#152433"));
+  // Orange side panel docked on the right (the product metaphor + brand color).
+  fillRoundedRect(82, 22, 24, 84, 11, rgba("#f48120"));
+  // Big teal AI sparkle in the main area.
+  fillPolygon(sparklePoints(48, 64, 30, 11), rgba("#4fd1d9"));
 }
 
 function downsample(size) {
