@@ -16,6 +16,34 @@ let busy = false;
 let pageContext = null;
 let activePort = null;
 const hoverDetails = new Map();
+const MESSAGE_ACTION_ICONS = {
+  copy: {
+    viewBox: "0 0 24 24",
+    paths: [
+      "M8 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z",
+      "M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"
+    ]
+  },
+  edit: {
+    viewBox: "0 0 24 24",
+    paths: [
+      "M12 20h9",
+      "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
+    ]
+  },
+  check: {
+    viewBox: "0 0 24 24",
+    paths: ["M20 6 9 17l-5-5"]
+  },
+  alert: {
+    viewBox: "0 0 24 24",
+    paths: [
+      "M12 9v4",
+      "M12 17h.01",
+      "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"
+    ]
+  }
+};
 
 init();
 
@@ -234,6 +262,17 @@ function extractPageContext(presets) {
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  const collectHtmlComments = (root = document.documentElement) => {
+    const comments = [];
+    if (!root) return comments;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+    let node;
+    while ((node = walker.nextNode()) && comments.length < 80) {
+      const text = normalize(node.nodeValue);
+      if (text) comments.push(text.slice(0, 1000));
+    }
+    return comments;
+  };
   const visibleText = normalize(document.body?.innerText);
   // Preset-driven structured-record pre-extraction. Presets are passed in (plain
   // data) because this function is injected via executeScript and cannot close
@@ -308,6 +347,10 @@ function extractPageContext(presets) {
   }
 
   const supplementalText = supplemental.join("\n");
+  const htmlComments = collectHtmlComments();
+  const htmlCommentText = htmlComments.length
+    ? `HTML COMMENTS:\n${htmlComments.map((text, index) => `[${index + 1}] ${text}`).join("\n")}`
+    : "";
   const presetText = presetRecords.join("\n\n");
   let combinedText;
   let truncated;
@@ -317,13 +360,17 @@ function extractPageContext(presets) {
     const nounPlural = String(preset.recordNounPlural || `${preset.recordNoun || "record"}s`);
     const sectionLabel = String(preset.sectionLabel || `${nounPlural.toUpperCase()} DETAILS`);
     const recordSection = `${sectionLabel} (${presetRecords.length} ${nounPlural}):\n${presetText}`;
-    combinedText = recordSection.slice(0, recordLimit);
-    truncated = recordSection.length > recordLimit;
+    combinedText = [
+      recordSection.slice(0, recordLimit),
+      htmlCommentText
+    ].filter(Boolean).join("\n\n").slice(0, maximumLength);
+    truncated = recordSection.length > recordLimit || combinedText.length >= maximumLength;
   } else {
     const visibleLimit = 20000;
     combinedText = [
       "VISIBLE PAGE TEXT:\n" + visibleText.slice(0, visibleLimit),
-      supplementalText ? "TOOLTIPS AND PAGE METADATA:\n" + supplementalText : ""
+      supplementalText ? "TOOLTIPS AND PAGE METADATA:\n" + supplementalText : "",
+      htmlCommentText
     ].filter(Boolean).join("\n\n").slice(0, maximumLength);
     truncated = visibleText.length > visibleLimit || combinedText.length >= maximumLength;
   }
@@ -334,7 +381,8 @@ function extractPageContext(presets) {
     text: combinedText,
     truncated,
     extractedRecordCount: presetRecords.length,
-    extractedRecordNoun: preset ? String(preset.recordNounPlural || `${preset.recordNoun || "record"}s`) : ""
+    extractedRecordNoun: preset ? String(preset.recordNounPlural || `${preset.recordNoun || "record"}s`) : "",
+    htmlCommentCount: htmlComments.length
   };
 }
 
@@ -394,40 +442,63 @@ function createMessageActions(message) {
   actions.className = "message-actions";
   if (message.role !== "user" && message.role !== "assistant") return actions;
 
-  const copy = createMessageActionButton("Copy", "Copy message", () => copyMessage(message, copy));
+  const copy = createMessageActionButton("copy", "Copy message", () => copyMessage(message, copy));
   actions.append(copy);
 
   if (message.role === "user") {
-    actions.append(createMessageActionButton("Edit", "Edit prompt", () => editPrompt(message)));
+    actions.append(createMessageActionButton("edit", "Edit prompt", () => editPrompt(message)));
   }
 
   return actions;
 }
 
-function createMessageActionButton(text, label, onClick) {
+function createMessageActionButton(icon, label, onClick) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "message-action";
-  button.textContent = text;
   button.title = label;
   button.setAttribute("aria-label", label);
+  button.dataset.icon = icon;
+  setMessageActionIcon(button, icon);
   button.addEventListener("click", onClick);
   return button;
+}
+
+function setMessageActionIcon(button, icon) {
+  const iconDefinition = MESSAGE_ACTION_ICONS[icon] || MESSAGE_ACTION_ICONS.copy;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", iconDefinition.viewBox);
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (const pathData of iconDefinition.paths) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", pathData);
+    svg.append(path);
+  }
+  button.replaceChildren(svg);
+  button.dataset.icon = icon;
 }
 
 async function copyMessage(message, button) {
   const text = String(message.content || "");
   if (!text) return;
-  const original = button.textContent;
+  const originalIcon = button.dataset.icon || "copy";
+  const originalLabel = button.getAttribute("aria-label") || "Copy message";
   button.disabled = true;
   try {
     await navigator.clipboard.writeText(text);
-    button.textContent = "Copied";
+    button.title = "Copied";
+    button.setAttribute("aria-label", "Copied");
+    setMessageActionIcon(button, "check");
   } catch {
-    button.textContent = "Failed";
+    button.title = "Copy failed";
+    button.setAttribute("aria-label", "Copy failed");
+    setMessageActionIcon(button, "alert");
   } finally {
     window.setTimeout(() => {
-      button.textContent = original;
+      button.title = originalLabel;
+      button.setAttribute("aria-label", originalLabel);
+      setMessageActionIcon(button, originalIcon);
       button.disabled = false;
     }, 900);
   }

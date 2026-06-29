@@ -22,7 +22,8 @@ header span { color: #8f99a8; font-size: 11px; }
 .message-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; white-space: normal; }
 .message strong { display: block; font-size: 11px; color: #a8b1bd; text-transform: uppercase; letter-spacing: .06em; }
 .message-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.message-action { border-radius: 6px; background: #303640; color: #cbd2dc; padding: 3px 6px; font-size: 10px; line-height: 1.2; font-weight: 650; }
+.message-action { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: #303640; color: #cbd2dc; padding: 0; line-height: 1; }
+.message-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .message-action:hover:not(:disabled) { background: #3a4250; color: #f6f8fa; }
 .message.user { background: #26213b; margin-left: 24px; }
 .message.assistant { background: #161b21; margin-right: 15px; }

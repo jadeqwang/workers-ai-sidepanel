@@ -3,9 +3,9 @@
 // Run: node scripts/test-extract-records-dom.mjs
 //
 // This launches headless Chrome, loads a non-Dinner-Elf fixture, injects the
-// actual runBrowserTool function source from background.js, and calls
-// runBrowserTool("extract_records", ...). It intentionally avoids jsdom or
-// package.json so the repository remains install-free.
+// actual injected function sources, and calls runBrowserTool/extractPageContext.
+// It intentionally avoids jsdom or package.json so the repository remains
+// install-free.
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const BACKGROUND_PATH = join(ROOT, "background.js");
+const SIDEPANEL_PATH = join(ROOT, "sidepanel.js");
 const FIXTURE_URL = `file://${join(ROOT, "scripts/fixtures/non-dinner-catalog.html")}`;
 
 let failures = 0;
@@ -39,6 +40,16 @@ function extractFunctionSource(source, name) {
   const start = source.indexOf(marker);
   if (start < 0) throw new Error(`Could not find ${name} in background.js`);
   const nextTopLevelFunction = "\nfunction validateConfig";
+  const end = source.indexOf(nextTopLevelFunction, start);
+  if (end < 0) throw new Error(`Could not find end of ${name}`);
+  return source.slice(start, end).trim();
+}
+
+function extractSidepanelFunctionSource(source, name) {
+  const marker = `function ${name}`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`Could not find ${name} in sidepanel.js`);
+  const nextTopLevelFunction = "\nfunction renderPageContext";
   const end = source.indexOf(nextTopLevelFunction, start);
   if (end < 0) throw new Error(`Could not find end of ${name}`);
   return source.slice(start, end).trim();
@@ -110,7 +121,9 @@ function cdpSocket(wsUrl) {
 
 async function main() {
   const background = await readFile(BACKGROUND_PATH, "utf8");
+  const sidepanel = await readFile(SIDEPANEL_PATH, "utf8");
   const runBrowserToolSource = extractFunctionSource(background, "runBrowserTool");
+  const extractPageContextSource = extractSidepanelFunctionSource(sidepanel, "extractPageContext");
   const userDataDir = await mkdtemp(join(tmpdir(), "chrome-ext-dom-test-"));
   let chrome;
   let socket;
@@ -160,6 +173,36 @@ async function main() {
     assert("filters out clearance by structured label", !value.returned.some((record) => record.name === "Ridge Fleece Hoodie"));
     assert("filters out leather by keyword fallback", !value.returned.some((record) => record.name === "Canvas Camp Duffel"));
     assert("does not require a site preset", value.totalMatched === 1 && value.source === "custom");
+
+    const readPageExpression = `
+      ${runBrowserToolSource}
+      runBrowserTool("read_page", { offset: 0, limit: 8000 }, []);
+    `;
+    const readPageResult = await socket.send("Runtime.evaluate", {
+      expression: readPageExpression,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    if (readPageResult.exceptionDetails) throw new Error(readPageResult.exceptionDetails.text);
+    const readPage = readPageResult.result.value;
+
+    assert("read_page reports HTML comments", readPage.htmlCommentCount === 1);
+    assert("read_page includes comment-only puzzle clue", readPage.text.includes("puzzle clue: rotate the ridge marker twice"));
+
+    const pageContextExpression = `
+      ${extractPageContextSource}
+      extractPageContext([]);
+    `;
+    const pageContextResult = await socket.send("Runtime.evaluate", {
+      expression: pageContextExpression,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    if (pageContextResult.exceptionDetails) throw new Error(pageContextResult.exceptionDetails.text);
+    const pageContext = pageContextResult.result.value;
+
+    assert("page context reports HTML comments", pageContext.htmlCommentCount === 1);
+    assert("page context includes comment-only puzzle clue", pageContext.text.includes("puzzle clue: rotate the ridge marker twice"));
     console.log(`\n${failures ? `${failures} check(s) FAILED` : "All checks passed"}`);
     process.exitCode = failures ? 1 : 0;
   } finally {

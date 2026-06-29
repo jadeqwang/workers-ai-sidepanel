@@ -1090,6 +1090,8 @@ function parseTaggedToolCall(content) {
   if (firstArgIndex < 0) {
     const parenthesized = parseParenthesizedToolCall(body);
     if (parenthesized) return parenthesized;
+    const malformedTagged = parseMalformedTaggedToolCall(body);
+    if (malformedTagged) return malformedTagged;
   }
   const rawTool = firstArgIndex >= 0 ? body.slice(0, firstArgIndex) : body;
   const tool = decodeHtmlEntities(rawTool.replace(/<[^>]+>/g, "")).trim();
@@ -1105,6 +1107,21 @@ function parseTaggedToolCall(content) {
   }
 
   return { tool, arguments: argumentsObject };
+}
+
+function parseMalformedTaggedToolCall(body) {
+  const decoded = decodeHtmlEntities(String(body || "").trim());
+  const match = decoded.match(/^([A-Za-z_][\w.-]*)\s*<\/arg_key>\s*([\s\S]*)$/i);
+  if (!match) return null;
+  const rawArguments = match[2].trim();
+  if (!rawArguments.startsWith("{")) return null;
+  try {
+    const parsedArguments = JSON.parse(rawArguments);
+    if (parsedArguments && typeof parsedArguments === "object" && !Array.isArray(parsedArguments)) {
+      return { tool: match[1], arguments: parsedArguments };
+    }
+  } catch {}
+  return null;
 }
 
 function parseParenthesizedToolCall(body) {
@@ -1366,6 +1383,17 @@ async function runBrowserTool(tool, args, presets = []) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.floor(number))) : fallback;
   };
+  const collectHtmlComments = (root = document.documentElement) => {
+    const comments = [];
+    if (!root) return comments;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+    let node;
+    while ((node = walker.nextNode()) && comments.length < 80) {
+      const text = normalize(node.nodeValue);
+      if (text) comments.push(text.slice(0, 1000));
+    }
+    return comments;
+  };
   const describeElement = (element) => {
     const type = element.getAttribute("type");
     return {
@@ -1420,10 +1448,22 @@ async function runBrowserTool(tool, args, presets = []) {
   };
 
   if (tool === "read_page") {
-    const text = normalize(document.body?.innerText);
+    const visibleText = normalize(document.body?.innerText);
+    const comments = collectHtmlComments();
+    const commentText = comments.length
+      ? `\n\nHTML COMMENTS:\n${comments.map((text, index) => `[${index + 1}] ${text}`).join("\n")}`
+      : "";
+    const text = `${visibleText}${commentText}`;
     const offset = clamp(args.offset, 0, text.length, 0);
     const limit = clamp(args.limit, 1, 8000, 5000);
-    return { title: document.title, url: location.href, offset, totalCharacters: text.length, text: text.slice(offset, offset + limit) };
+    return {
+      title: document.title,
+      url: location.href,
+      offset,
+      totalCharacters: text.length,
+      htmlCommentCount: comments.length,
+      text: text.slice(offset, offset + limit)
+    };
   }
 
   if (tool === "find_text") {
