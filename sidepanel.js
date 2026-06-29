@@ -6,12 +6,23 @@ const promptEl = document.querySelector("#prompt");
 const sendButton = document.querySelector("#send");
 const stopButton = document.querySelector("#stop");
 const modelLabel = document.querySelector("#model-label");
+const modelSelect = document.querySelector("#model-select");
+const branchPrevButton = document.querySelector("#branch-prev");
+const branchNextButton = document.querySelector("#branch-next");
+const branchLabel = document.querySelector("#branch-label");
 const addPageButton = document.querySelector("#add-page");
 const pageContextBar = document.querySelector("#page-context-bar");
 const pageContextLabel = document.querySelector("#page-context-label");
 const controlPageButton = document.querySelector("#control-page");
 const visionPageButton = document.querySelector("#vision-page");
+const TEXT_MODELS = [
+  { label: "GLM 5.2", value: "@cf/zai-org/glm-5.2" },
+  { label: "Kimi K2.7 Code", value: "@cf/moonshotai/kimi-k2.7-code" }
+];
+const DEFAULT_TEXT_MODEL = TEXT_MODELS[0].value;
+const SIDE_PANEL_MODEL_KEY = "sidePanelModel";
 let messages = [];
+let conversationBranches = { branches: [], activeBranchId: "" };
 let busy = false;
 let pageContext = null;
 let activePort = null;
@@ -42,15 +53,40 @@ const MESSAGE_ACTION_ICONS = {
       "M12 17h.01",
       "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"
     ]
+  },
+  rerun: {
+    viewBox: "0 0 24 24",
+    paths: [
+      "M21 12a9 9 0 1 1-2.64-6.36",
+      "M21 3v6h-6"
+    ]
   }
 };
 
 init();
 
 async function init() {
-  const stored = await chrome.storage.local.get({ conversation: [], model: "", endpoint: "" });
-  messages = Array.isArray(stored.conversation) ? stored.conversation : [];
-  modelLabel.textContent = stored.endpoint ? stored.model || "Configured" : "Not configured";
+  const stored = await chrome.storage.local.get({
+    conversation: [],
+    conversationBranches: null,
+    [SIDE_PANEL_MODEL_KEY]: DEFAULT_TEXT_MODEL,
+    model: "",
+    endpoint: ""
+  });
+  const selectedModel = isSupportedTextModel(stored[SIDE_PANEL_MODEL_KEY])
+    ? stored[SIDE_PANEL_MODEL_KEY]
+    : DEFAULT_TEXT_MODEL;
+  modelSelect.value = selectedModel;
+  conversationBranches = normalizeConversationBranches(stored.conversationBranches, stored.conversation);
+  messages = getActiveBranch().messages;
+  if (!stored.conversationBranches && Array.isArray(stored.conversation)) {
+    await persist();
+  }
+  if (selectedModel !== stored[SIDE_PANEL_MODEL_KEY]) {
+    await chrome.storage.local.set({ [SIDE_PANEL_MODEL_KEY]: selectedModel });
+  }
+  updateModelLabel(stored.endpoint);
+  updateBranchControls();
   render();
   promptEl.focus();
 }
@@ -61,7 +97,8 @@ form.addEventListener("submit", async (event) => {
   if (!content || busy) return;
 
   messages = messages.filter((item) => item.role !== "error");
-  messages.push({ role: "user", content });
+  getActiveBranch().messages = messages;
+  messages.push({ id: crypto.randomUUID(), role: "user", content });
   const assistantMessage = {
     id: crypto.randomUUID(),
     role: "assistant",
@@ -81,6 +118,7 @@ form.addEventListener("submit", async (event) => {
     await streamAssistantResponse(assistantMessage, pageContext);
   } catch (error) {
     messages = messages.filter((message) => message !== assistantMessage);
+    getActiveBranch().messages = messages;
     messages.push({ role: "error", content: error.message });
   } finally {
     assistantMessage.pending = false;
@@ -91,6 +129,20 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+modelSelect.addEventListener("change", async () => {
+  if (busy) {
+    modelSelect.value = getSelectedModel();
+    return;
+  }
+  if (!isSupportedTextModel(modelSelect.value)) modelSelect.value = DEFAULT_TEXT_MODEL;
+  await chrome.storage.local.set({ [SIDE_PANEL_MODEL_KEY]: modelSelect.value });
+  const { endpoint } = await chrome.storage.local.get({ endpoint: "" });
+  updateModelLabel(endpoint);
+});
+
+branchPrevButton.addEventListener("click", () => switchBranchByOffset(-1));
+branchNextButton.addEventListener("click", () => switchBranchByOffset(1));
+
 promptEl.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -99,7 +151,8 @@ promptEl.addEventListener("keydown", (event) => {
 });
 
 document.querySelector("#clear").addEventListener("click", async () => {
-  messages = [];
+  conversationBranches = createEmptyConversationBranches();
+  messages = getActiveBranch().messages;
   pageContext = null;
   hoverDetails.clear();
   await persist();
@@ -386,6 +439,92 @@ function extractPageContext(presets) {
   };
 }
 
+function createEmptyConversationBranches() {
+  const id = crypto.randomUUID();
+  return {
+    branches: [{ id, label: "Branch 1", createdAt: Date.now(), messages: [] }],
+    activeBranchId: id
+  };
+}
+
+function normalizeConversationBranches(storedBranches, legacyConversation) {
+  if (storedBranches && Array.isArray(storedBranches.branches) && storedBranches.branches.length) {
+    const branches = storedBranches.branches.map((branch, index) => ({
+      id: String(branch.id || crypto.randomUUID()),
+      label: String(branch.label || `Branch ${index + 1}`),
+      createdAt: Number(branch.createdAt) || Date.now(),
+      messages: normalizeStoredMessages(branch.messages)
+    }));
+    const activeBranchId = branches.some((branch) => branch.id === storedBranches.activeBranchId)
+      ? storedBranches.activeBranchId
+      : branches[0].id;
+    return { branches, activeBranchId };
+  }
+
+  const migrated = createEmptyConversationBranches();
+  migrated.branches[0].messages = normalizeStoredMessages(legacyConversation);
+  return migrated;
+}
+
+function normalizeStoredMessages(items) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      ...item,
+      id: item.id || crypto.randomUUID()
+    }));
+}
+
+function getActiveBranch() {
+  if (!conversationBranches.branches.length) conversationBranches = createEmptyConversationBranches();
+  let branch = conversationBranches.branches.find((item) => item.id === conversationBranches.activeBranchId);
+  if (!branch) {
+    branch = conversationBranches.branches[0];
+    conversationBranches.activeBranchId = branch.id;
+  }
+  branch.messages ||= [];
+  return branch;
+}
+
+function getActiveBranchIndex() {
+  const index = conversationBranches.branches.findIndex((branch) => branch.id === conversationBranches.activeBranchId);
+  return index >= 0 ? index : 0;
+}
+
+async function switchBranchByOffset(offset) {
+  if (busy || conversationBranches.branches.length < 2) return;
+  const nextIndex = getActiveBranchIndex() + offset;
+  if (nextIndex < 0 || nextIndex >= conversationBranches.branches.length) return;
+  conversationBranches.activeBranchId = conversationBranches.branches[nextIndex].id;
+  messages = getActiveBranch().messages;
+  await persist();
+  render();
+}
+
+function updateBranchControls() {
+  const count = conversationBranches.branches.length || 1;
+  const position = getActiveBranchIndex() + 1;
+  branchLabel.textContent = `Branch ${position}/${count}`;
+  branchPrevButton.disabled = busy || position <= 1;
+  branchNextButton.disabled = busy || position >= count;
+}
+
+function getSelectedModel() {
+  return isSupportedTextModel(modelSelect.value) ? modelSelect.value : DEFAULT_TEXT_MODEL;
+}
+
+function getSelectedModelLabel() {
+  return TEXT_MODELS.find((model) => model.value === getSelectedModel())?.label || TEXT_MODELS[0].label;
+}
+
+function isSupportedTextModel(value) {
+  return TEXT_MODELS.some((model) => model.value === value);
+}
+
+function updateModelLabel(endpointConfigured = true) {
+  modelLabel.textContent = endpointConfigured ? getSelectedModelLabel() : `Not configured · ${getSelectedModelLabel()}`;
+}
+
 function renderPageContext() {
   pageContextBar.hidden = !pageContext;
   addPageButton.setAttribute("aria-pressed", String(Boolean(pageContext)));
@@ -402,6 +541,7 @@ function renderPageContext() {
 }
 
 function render() {
+  updateBranchControls();
   messagesEl.replaceChildren();
   if (!messages.length) {
     const empty = document.createElement("div");
@@ -446,7 +586,12 @@ function createMessageActions(message) {
   actions.append(copy);
 
   if (message.role === "user") {
-    actions.append(createMessageActionButton("edit", "Edit prompt", () => editPrompt(message)));
+    const rerun = createMessageActionButton("rerun", "Rerun from here", () => rerunFromUserMessage(message));
+    rerun.disabled = busy;
+    actions.append(rerun);
+    const edit = createMessageActionButton("edit", "Edit prompt", () => editPrompt(message));
+    edit.disabled = busy;
+    actions.append(edit);
   }
 
   return actions;
@@ -509,6 +654,54 @@ function editPrompt(message) {
   promptEl.value = String(message.content || "");
   promptEl.focus();
   promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
+}
+
+async function rerunFromUserMessage(message) {
+  if (busy || message?.role !== "user") return;
+  const activeBranch = getActiveBranch();
+  const messageIndex = activeBranch.messages.findIndex((item) => item.id === message.id);
+  if (messageIndex < 0) return;
+
+  const newBranchId = crypto.randomUUID();
+  const sourceMessages = activeBranch.messages
+    .slice(0, messageIndex + 1)
+    .filter((item) => item.role !== "error")
+    .map((item) => ({ ...item, pending: false }));
+  const assistantMessage = {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    content: "",
+    reasoningContent: "",
+    toolSteps: [],
+    pendingApproval: null,
+    pending: true
+  };
+
+  conversationBranches.branches.push({
+    id: newBranchId,
+    label: `Branch ${conversationBranches.branches.length + 1}`,
+    createdAt: Date.now(),
+    messages: [...sourceMessages, assistantMessage]
+  });
+  conversationBranches.activeBranchId = newBranchId;
+  messages = getActiveBranch().messages;
+  setBusy(true);
+  render();
+  await persist();
+
+  try {
+    await streamAssistantResponse(assistantMessage, pageContext);
+  } catch (error) {
+    messages = messages.filter((item) => item !== assistantMessage);
+    getActiveBranch().messages = messages;
+    messages.push({ id: crypto.randomUUID(), role: "error", content: error.message });
+  } finally {
+    assistantMessage.pending = false;
+    setBusy(false);
+    render();
+    await persist();
+    promptEl.focus();
+  }
 }
 
 function createThinkingDisclosure(reasoningContent, pending = false) {
@@ -689,6 +882,7 @@ function updateRenderedAssistant(message) {
 function streamAssistantResponse(assistantMessage, currentPageContext) {
   return new Promise((resolve, reject) => {
     const requestMessages = messages.filter((message) => message !== assistantMessage);
+    const modelOverride = getSelectedModel();
     const port = chrome.runtime.connect({ name: "chat-stream" });
     activePort = port;
     let settled = false;
@@ -780,21 +974,28 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         settle(resolve);
         return;
       }
-      requestBufferedAssistantResponse(requestMessages, currentPageContext, assistantMessage)
+      requestBufferedAssistantResponse(requestMessages, currentPageContext, assistantMessage, modelOverride)
         .then(() => settle(resolve))
         .catch((error) => settle(reject, error));
     });
 
-    port.postMessage({ type: "chat", messages: requestMessages, pageContext: currentPageContext, useVision: Boolean(currentPageContext?.useVision) });
+    port.postMessage({
+      type: "chat",
+      messages: requestMessages,
+      pageContext: currentPageContext,
+      useVision: Boolean(currentPageContext?.useVision),
+      modelOverride
+    });
   });
 }
 
-async function requestBufferedAssistantResponse(requestMessages, currentPageContext, assistantMessage) {
+async function requestBufferedAssistantResponse(requestMessages, currentPageContext, assistantMessage, modelOverride = getSelectedModel()) {
   const response = await chrome.runtime.sendMessage({
     type: "chat",
     messages: requestMessages,
     pageContext: currentPageContext,
-    useVision: Boolean(currentPageContext?.useVision)
+    useVision: Boolean(currentPageContext?.useVision),
+    modelOverride
   });
   if (!response?.ok) {
     throw new Error(response?.error || chrome.runtime.lastError?.message || "The streaming connection closed.");
@@ -809,6 +1010,9 @@ function setBusy(value) {
   busy = value;
   sendButton.disabled = value;
   promptEl.disabled = value;
+  modelSelect.disabled = value;
+  branchPrevButton.disabled = value || getActiveBranchIndex() <= 0;
+  branchNextButton.disabled = value || getActiveBranchIndex() >= conversationBranches.branches.length - 1;
   stopButton.hidden = !value;
   stopButton.disabled = !value;
   if (!value && activePort) {
@@ -818,9 +1022,18 @@ function setBusy(value) {
 }
 
 async function persist() {
-  await chrome.storage.local.set({
-    conversation: messages
+  getActiveBranch().messages = messages;
+  const branches = conversationBranches.branches.map((branch) => ({
+    ...branch,
+    messages: branch.messages
       .filter((item) => item.role !== "error" && !item.pending)
       .map(({ pending, ...item }) => item)
+  }));
+  await chrome.storage.local.set({
+    conversationBranches: {
+      branches,
+      activeBranchId: conversationBranches.activeBranchId
+    }
   });
+  await chrome.storage.local.remove("conversation");
 }

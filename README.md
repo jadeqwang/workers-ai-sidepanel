@@ -18,6 +18,8 @@ This extension is the general version of the fix for the browser extension neces
 
 - Side-panel chat UI
 - Streaming assistant responses
+- Per-turn text model switcher for GLM 5.2 and Kimi K2.7 Code when using a compatible Workers AI endpoint
+- Branch-aware reruns from any previous user message, preserving the original answer branch
 - Optional fallback endpoint for transient 502/503/504 capacity errors
 - Current-page context sharing after explicit permission
 - Optional browser-control tools for attached pages
@@ -98,7 +100,30 @@ Model IDs and versions change over time. The authoritative list is the [Workers 
 
 Click **Save settings**, open the side panel, and send a message.
 
-> **Tip — GLM + Kimi together.** A nice setup is GLM as the **primary** model and Kimi as the **fallback** (same endpoint URL and token, different model ID), so that if GLM is briefly at capacity the extension automatically retries on Kimi. See [Fallback routing](#fallback-routing-optional).
+After the endpoint and token are configured, the side panel also provides a compact runtime model dropdown for:
+
+| Label | Model ID |
+| --- | --- |
+| GLM 5.2 | `@cf/zai-org/glm-5.2` |
+| Kimi K2.7 Code | `@cf/moonshotai/kimi-k2.7-code` |
+
+That dropdown is a side-panel preference and overrides the primary model for normal text chat turns while keeping the same endpoint, token, temperature, and max-token settings from the options page. Vision turns still use the separately configured vision model, and fallback routing still only happens after transient capacity errors.
+
+> **Tip — GLM + Kimi together.** If you use the Workers AI endpoint as your primary provider, you can switch between GLM and Kimi per turn from the side panel. You can still configure a fallback model for automatic retries when the selected primary model is briefly at capacity. See [Fallback routing](#fallback-routing-optional).
+
+## Chat workflow
+
+### Model switching
+
+Use the model dropdown under the side-panel title to choose **GLM 5.2** or **Kimi K2.7 Code** before sending or rerunning a message. The choice is saved in Chrome local storage for the side panel and is disabled while a response is streaming so an in-flight turn cannot change models halfway through.
+
+This selector is intentionally narrow: it only changes the text-chat model sent to the configured primary endpoint. The options page remains the source of truth for endpoint URLs, authentication, temperature, max tokens, fallback routing, and vision routing.
+
+### Reruns and branches
+
+Each user message has a rerun action. Clicking it creates a new conversation branch that contains the transcript up to and including that user message, then streams a fresh assistant answer using the currently selected model. The old branch is kept unchanged.
+
+Use the branch controls above the composer to move through available branches. The side panel renders and sends only the active branch, so continuing a conversation after switching branches follows that branch's transcript.
 
 ---
 
