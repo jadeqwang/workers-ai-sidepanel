@@ -1,4 +1,5 @@
 import { SITE_PRESETS } from "./site-presets.js";
+import { selectVisionProvider, buildVisionMessages } from "./vision.js";
 
 const DEFAULTS = {
   endpoint: "",
@@ -7,6 +8,9 @@ const DEFAULTS = {
   fallbackEndpoint: "",
   fallbackModel: "",
   fallbackBearerToken: "",
+  visionEndpoint: "",
+  visionModel: "@cf/moonshotai/kimi-k2.7-code",
+  visionBearerToken: "",
   accessClientId: "",
   accessClientSecret: "",
   systemPrompt: "You are a concise, accurate assistant.",
@@ -363,7 +367,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "chat") return false;
 
-  requestCompletion(message.messages, message.pageContext)
+  requestCompletion(message.messages, message.pageContext, {}, message.useVision)
     .then((result) => sendResponse({ ok: true, ...result }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
 
@@ -410,7 +414,7 @@ chrome.runtime.onConnect.addListener((port) => {
         pendingApproval = { id, resolve };
         port.postMessage({ type: "approval_request", id, ...request });
       })
-    })
+    }, message.useVision)
       .then((result) => port.postMessage({ type: "done", ...result }))
       .catch((error) => {
         if (error.name === "AbortError") {
@@ -433,9 +437,19 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-async function requestCompletion(messages, pageContext, stream = {}) {
+async function requestCompletion(messages, pageContext, stream = {}, useVision = false) {
   const config = await chrome.storage.local.get(DEFAULTS);
   validateConfig(config);
+
+  // Vision routing: when this turn is flagged for vision and a page is attached,
+  // route END-TO-END to the vision provider as a conversational single-shot —
+  // NO browser tools, NO tool loop (the human clicks to advance). Vision and
+  // Control are independent toggles; if both are on we still prefer this vision
+  // single-shot path. A vision-in-the-loop mode (vision + browser tools) is out
+  // of scope for now.
+  if (useVision && pageContext?.tabId) {
+    return requestVisionCompletion(config, messages, pageContext, stream);
+  }
 
   if (!pageContext?.tabId) {
     const requestMessages = config.systemPrompt
@@ -580,6 +594,45 @@ async function finishBrowserAnswerWithoutTools(config, workingMessages, reasonin
   };
 }
 
+// End-to-end vision turn: capture the attached page and send it with the
+// conversation to the vision provider in one call. Single-shot — no browser
+// tools, no tool loop, full max_tokens for puzzle reasoning. Streams back like
+// the no-tab chat path. Does NOT use requestModelWithFallback: the vision
+// provider is selected by routing, not reached via the capacity fallback.
+async function requestVisionCompletion(config, messages, pageContext, stream = {}) {
+  const visionProvider = getVisionProvider(config);
+  if (!visionProvider) {
+    throw new Error("Configure the vision model (endpoint + model) in extension options to use Vision.");
+  }
+  validateEndpointUrl(visionProvider.endpoint, "vision endpoint");
+  throwIfAborted(stream.signal);
+
+  let imageDataUrl = "";
+  try {
+    imageDataUrl = await captureVisibleTabDataUrl(pageContext.tabId);
+  } catch (error) {
+    throw new Error(`Could not capture the page for the vision model: ${error.message}`);
+  }
+  if (!imageDataUrl) {
+    throw new Error("Could not capture the attached page for the vision model. Make sure it is the active tab.");
+  }
+  throwIfAborted(stream.signal);
+
+  const visionMessages = buildVisionMessages(
+    config.systemPrompt,
+    normalizeChatMessages(messages),
+    imageDataUrl
+  );
+  // Send at the full configured max_tokens (not the 768 tool-loop cap) and with
+  // NO tools/tool_choice. shouldSendThinkingFlag only matches /glm/i, so Kimi
+  // correctly never receives the GLM thinking flag.
+  return requestModel(visionProvider, visionMessages, Number(config.maxTokens), {
+    signal: stream.signal,
+    onReasoningDelta: stream.onReasoningDelta,
+    onContentDelta: stream.onContentDelta
+  });
+}
+
 function getPrimaryProvider(config) {
   return {
     endpoint: config.endpoint,
@@ -603,6 +656,17 @@ function getFallbackProvider(config) {
       bearerToken: config.fallbackBearerToken
     })
   };
+}
+
+// The vision provider is a THIRD, independent provider chosen by routing (the
+// per-turn useVision flag), not the capacity fallback. Returns null unless both
+// visionEndpoint and visionModel are configured. Reuses the shared Cloudflare
+// Access fields in its headers, like the primary provider does.
+function getVisionProvider(config) {
+  const selected = selectVisionProvider(config);
+  if (!selected) return null;
+  const { credentials, ...provider } = selected;
+  return { ...provider, headers: buildHeaders(credentials) };
 }
 
 function buildHeaders(credentials) {
@@ -1253,11 +1317,18 @@ function isPurchaseLikeClick(args = {}) {
   return /\b(buy|purchase|checkout|cart|pay|payment|place[-_\s]*order|order[-_\s]*now|subscribe|confirm|delete|remove[-_\s]*account)\b/.test(haystack);
 }
 
+// Capture the visible area of the tab as a PNG data URL. Returns "" when the
+// tab is not the active/foreground tab (captureVisibleTab can only grab the
+// active tab). May throw on capture failures; callers decide how to handle it.
+async function captureVisibleTabDataUrl(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab?.windowId || tab.active === false) return "";
+  return chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+}
+
 async function captureToolStepScreenshot(tabId) {
   try {
-    const tab = await chrome.tabs.get(tabId);
-    if (!tab?.windowId || tab.active === false) return "";
-    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return await captureVisibleTabDataUrl(tabId);
   } catch {
     return "";
   }
@@ -1709,6 +1780,12 @@ function validateConfig(config) {
       throw new Error("Set both fallback endpoint URL and fallback model, or leave all fallback fields blank.");
     }
     validateEndpointUrl(config.fallbackEndpoint, "fallback endpoint");
+  }
+  if (config.visionEndpoint || config.visionBearerToken) {
+    if (!config.visionEndpoint || !config.visionModel) {
+      throw new Error("Set both vision endpoint URL and vision model, or leave the vision endpoint and token blank.");
+    }
+    validateEndpointUrl(config.visionEndpoint, "vision endpoint");
   }
 }
 

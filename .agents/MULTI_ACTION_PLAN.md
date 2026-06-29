@@ -1,5 +1,10 @@
 # Multi-action agent — implementation plan
 
+> **STATUS (2026-06-29): COMPLETE.** All phases (1a–4) are implemented; only optional live
+> smoke-tests remain (noted inline). Kept as a historical record. Active work has moved to
+> [VISION_HYBRID_PLAN.md](VISION_HYBRID_PLAN.md) (adding Kimi K2.7 vision alongside GLM 5.2).
+
+
 Goal: grow the existing browser agent loop (`background.js`) from a single-tool-per-step
 helper into a transparent, reliable, multi-action agent. Tracking the phased plan agreed
 with the user (jadewang@gmail.com).

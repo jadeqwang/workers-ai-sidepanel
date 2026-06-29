@@ -10,6 +10,7 @@ const addPageButton = document.querySelector("#add-page");
 const pageContextBar = document.querySelector("#page-context-bar");
 const pageContextLabel = document.querySelector("#page-context-label");
 const controlPageButton = document.querySelector("#control-page");
+const visionPageButton = document.querySelector("#vision-page");
 let messages = [];
 let busy = false;
 let pageContext = null;
@@ -141,6 +142,14 @@ document.querySelector("#remove-page").addEventListener("click", () => {
 controlPageButton.addEventListener("click", () => {
   if (!pageContext) return;
   pageContext.browserControl = !pageContext.browserControl;
+  renderPageContext();
+});
+
+// Vision is independent of Control: the common puzzle case is Vision on with
+// Control off. When on, this turn is routed end-to-end to the vision model.
+visionPageButton.addEventListener("click", () => {
+  if (!pageContext) return;
+  pageContext.useVision = !pageContext.useVision;
   renderPageContext();
 });
 
@@ -336,6 +345,9 @@ function renderPageContext() {
   controlPageButton.hidden = !pageContext;
   controlPageButton.setAttribute("aria-pressed", String(Boolean(pageContext?.browserControl)));
   controlPageButton.textContent = pageContext?.browserControl ? "Control on" : "Control off";
+  visionPageButton.hidden = !pageContext;
+  visionPageButton.setAttribute("aria-pressed", String(Boolean(pageContext?.useVision)));
+  visionPageButton.textContent = pageContext?.useVision ? "Vision on" : "Vision off";
   pageContextLabel.textContent = pageContext
     ? `${pageContext.extractedRecordCount ? `${pageContext.extractedRecordCount} ${pageContext.extractedRecordNoun || "records"} · ` : hoverDetails.size ? `${hoverDetails.size} hover capture${hoverDetails.size === 1 ? "" : "s"} · ` : ""}${pageContext.title}${pageContext.truncated ? " (excerpt)" : ""}`
     : "";
@@ -354,12 +366,15 @@ function render() {
     const article = document.createElement("article");
     article.className = `message ${message.role}`;
     if (message.id) article.dataset.messageId = message.id;
+    const header = document.createElement("div");
+    header.className = "message-header";
     const label = document.createElement("strong");
     label.textContent = message.role === "user" ? "You" : message.role === "error" ? "Error" : "AI";
+    header.append(label, createMessageActions(message));
     const content = document.createElement("div");
     content.className = "message-content";
     content.textContent = message.content || (message.pending ? "Thinking…" : "");
-    article.append(label, content);
+    article.append(header, content);
     if (message.role === "assistant" && message.reasoningContent) {
       article.append(createThinkingDisclosure(message.reasoningContent, message.pending));
     }
@@ -372,6 +387,57 @@ function render() {
     messagesEl.append(article);
   }
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function createMessageActions(message) {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  if (message.role !== "user" && message.role !== "assistant") return actions;
+
+  const copy = createMessageActionButton("Copy", "Copy message", () => copyMessage(message, copy));
+  actions.append(copy);
+
+  if (message.role === "user") {
+    actions.append(createMessageActionButton("Edit", "Edit prompt", () => editPrompt(message)));
+  }
+
+  return actions;
+}
+
+function createMessageActionButton(text, label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-action";
+  button.textContent = text;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function copyMessage(message, button) {
+  const text = String(message.content || "");
+  if (!text) return;
+  const original = button.textContent;
+  button.disabled = true;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied";
+  } catch {
+    button.textContent = "Failed";
+  } finally {
+    window.setTimeout(() => {
+      button.textContent = original;
+      button.disabled = false;
+    }, 900);
+  }
+}
+
+function editPrompt(message) {
+  if (busy) return;
+  promptEl.value = String(message.content || "");
+  promptEl.focus();
+  promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
 }
 
 function createThinkingDisclosure(reasoningContent, pending = false) {
@@ -648,7 +714,7 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         .catch((error) => settle(reject, error));
     });
 
-    port.postMessage({ type: "chat", messages: requestMessages, pageContext: currentPageContext });
+    port.postMessage({ type: "chat", messages: requestMessages, pageContext: currentPageContext, useVision: Boolean(currentPageContext?.useVision) });
   });
 }
 
@@ -656,7 +722,8 @@ async function requestBufferedAssistantResponse(requestMessages, currentPageCont
   const response = await chrome.runtime.sendMessage({
     type: "chat",
     messages: requestMessages,
-    pageContext: currentPageContext
+    pageContext: currentPageContext,
+    useVision: Boolean(currentPageContext?.useVision)
   });
   if (!response?.ok) {
     throw new Error(response?.error || chrome.runtime.lastError?.message || "The streaming connection closed.");

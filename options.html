@@ -21,6 +21,13 @@
           <label>Fallback bearer token<input id="fallbackBearerToken" type="password" autocomplete="off" placeholder="Optional"></label>
         </fieldset>
         <fieldset>
+          <legend>Vision model (optional)</legend>
+          <p class="intro">Routed per-turn when you turn on <strong>Vision</strong> for an attached page. Sends a screenshot with the conversation to a multimodal model (e.g. Kimi). Reuses the Cloudflare Access token below.</p>
+          <label>Vision endpoint URL<input id="visionEndpoint" type="url" placeholder="https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1/chat/completions"></label>
+          <label>Vision model<input id="visionModel" type="text" placeholder="@cf/moonshotai/kimi-k2.7-code"></label>
+          <label>Vision bearer token<input id="visionBearerToken" type="password" autocomplete="off" placeholder="Optional"></label>
+        </fieldset>
+        <fieldset>
           <legend>Cloudflare Access service token (optional)</legend>
           <label>Client ID<input id="accessClientId" type="password" autocomplete="off"></label>
           <label>Client secret<input id="accessClientSecret" type="password" autocomplete="off"></label>
