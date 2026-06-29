@@ -34,6 +34,10 @@ const CONTROL_TOOLS = new Set([
 // any results.
 const MAX_ACTIONS_PER_TURN = 3;
 const DEFAULT_MAX_TOOL_STEPS = 6;
+const TEXT_MODEL_OVERRIDES = new Set([
+  "@cf/zai-org/glm-5.2",
+  "@cf/moonshotai/kimi-k2.7-code"
+]);
 
 const SELECTOR_PARAM = { type: "string", description: "CSS selector for the target element." };
 const INDEX_PARAM = { type: "integer", minimum: 0, description: "Which match to use when the selector matches several elements (0-based)." };
@@ -367,7 +371,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "chat") return false;
 
-  requestCompletion(message.messages, message.pageContext, {}, message.useVision)
+  requestCompletion(message.messages, message.pageContext, {}, message.useVision, message.modelOverride)
     .then((result) => sendResponse({ ok: true, ...result }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
 
@@ -414,7 +418,7 @@ chrome.runtime.onConnect.addListener((port) => {
         pendingApproval = { id, resolve };
         port.postMessage({ type: "approval_request", id, ...request });
       })
-    }, message.useVision)
+    }, message.useVision, message.modelOverride)
       .then((result) => port.postMessage({ type: "done", ...result }))
       .catch((error) => {
         if (error.name === "AbortError") {
@@ -437,9 +441,10 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-async function requestCompletion(messages, pageContext, stream = {}, useVision = false) {
+async function requestCompletion(messages, pageContext, stream = {}, useVision = false, modelOverride = "") {
   const config = await chrome.storage.local.get(DEFAULTS);
   validateConfig(config);
+  const primaryModelOverride = normalizeModelOverride(modelOverride);
 
   // Vision routing: when this turn is flagged for vision and a page is attached,
   // route END-TO-END to the vision provider as a conversational single-shot —
@@ -455,7 +460,7 @@ async function requestCompletion(messages, pageContext, stream = {}, useVision =
     const requestMessages = config.systemPrompt
       ? [{ role: "system", content: config.systemPrompt }, ...normalizeChatMessages(messages)]
       : normalizeChatMessages(messages);
-    return requestModelWithFallback(config, requestMessages, Number(config.maxTokens), stream);
+    return requestModelWithFallback(config, requestMessages, Number(config.maxTokens), stream, primaryModelOverride);
   }
 
   const workingMessages = [
@@ -478,7 +483,8 @@ async function requestCompletion(messages, pageContext, stream = {}, useVision =
         // Browser-agent turns may be intermediate tool-call/planning turns.
         // Buffer content until we know it is the final user-facing answer.
         tools: browserTools
-      }
+      },
+      primaryModelOverride
     );
     if (result.reasoningContent) reasoningParts.push(result.reasoningContent);
 
@@ -503,7 +509,7 @@ async function requestCompletion(messages, pageContext, stream = {}, useVision =
     }
 
     if (step === maxToolSteps - 1) {
-      return finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream);
+      return finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream, primaryModelOverride);
     }
 
     const limitedCalls = calls.slice(0, MAX_ACTIONS_PER_TURN);
@@ -570,7 +576,7 @@ async function requestCompletion(messages, pageContext, stream = {}, useVision =
   throw new Error("The browser tool loop ended without an answer.");
 }
 
-async function finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream = {}) {
+async function finishBrowserAnswerWithoutTools(config, workingMessages, reasoningParts, maxToolSteps, stream = {}, modelOverride = "") {
   throwIfAborted(stream.signal);
   const finalPrompt = {
     role: "user",
@@ -580,7 +586,8 @@ async function finishBrowserAnswerWithoutTools(config, workingMessages, reasonin
     config,
     [...workingMessages, finalPrompt],
     Number(config.maxTokens),
-    { signal: stream.signal }
+    { signal: stream.signal },
+    modelOverride
   );
   if (result.reasoningContent) reasoningParts.push(result.reasoningContent);
   const finalContent = stripLeakedThinking(result.content);
@@ -633,10 +640,10 @@ async function requestVisionCompletion(config, messages, pageContext, stream = {
   });
 }
 
-function getPrimaryProvider(config) {
+function getPrimaryProvider(config, modelOverride = "") {
   return {
     endpoint: config.endpoint,
-    model: config.model,
+    model: modelOverride || config.model,
     temperature: Number(config.temperature),
     headers: buildHeaders({
       bearerToken: config.bearerToken,
@@ -700,6 +707,10 @@ function shouldSendThinkingFlag(provider) {
   return /\bglm[-_.\w]*/i.test(provider.model);
 }
 
+function normalizeModelOverride(value) {
+  return TEXT_MODEL_OVERRIDES.has(value) ? value : "";
+}
+
 function createRequestError(status, detail) {
   const error = new Error(`Request failed (${status}): ${detail}`);
   error.status = status;
@@ -723,8 +734,8 @@ function throwIfAborted(signal) {
   throw new DOMException("The request was stopped.", "AbortError");
 }
 
-async function requestModelWithFallback(config, messages, maxTokens, stream = {}) {
-  const primary = getPrimaryProvider(config);
+async function requestModelWithFallback(config, messages, maxTokens, stream = {}, modelOverride = "") {
+  const primary = getPrimaryProvider(config, modelOverride);
   try {
     return await requestModel(primary, messages, maxTokens, stream);
   } catch (error) {
@@ -1090,6 +1101,8 @@ function parseTaggedToolCall(content) {
   if (firstArgIndex < 0) {
     const parenthesized = parseParenthesizedToolCall(body);
     if (parenthesized) return parenthesized;
+    const malformedTagged = parseMalformedTaggedToolCall(body);
+    if (malformedTagged) return malformedTagged;
   }
   const rawTool = firstArgIndex >= 0 ? body.slice(0, firstArgIndex) : body;
   const tool = decodeHtmlEntities(rawTool.replace(/<[^>]+>/g, "")).trim();
@@ -1105,6 +1118,21 @@ function parseTaggedToolCall(content) {
   }
 
   return { tool, arguments: argumentsObject };
+}
+
+function parseMalformedTaggedToolCall(body) {
+  const decoded = decodeHtmlEntities(String(body || "").trim());
+  const match = decoded.match(/^([A-Za-z_][\w.-]*)\s*<\/arg_key>\s*([\s\S]*)$/i);
+  if (!match) return null;
+  const rawArguments = match[2].trim();
+  if (!rawArguments.startsWith("{")) return null;
+  try {
+    const parsedArguments = JSON.parse(rawArguments);
+    if (parsedArguments && typeof parsedArguments === "object" && !Array.isArray(parsedArguments)) {
+      return { tool: match[1], arguments: parsedArguments };
+    }
+  } catch {}
+  return null;
 }
 
 function parseParenthesizedToolCall(body) {
@@ -1366,6 +1394,17 @@ async function runBrowserTool(tool, args, presets = []) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.floor(number))) : fallback;
   };
+  const collectHtmlComments = (root = document.documentElement) => {
+    const comments = [];
+    if (!root) return comments;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+    let node;
+    while ((node = walker.nextNode()) && comments.length < 80) {
+      const text = normalize(node.nodeValue);
+      if (text) comments.push(text.slice(0, 1000));
+    }
+    return comments;
+  };
   const describeElement = (element) => {
     const type = element.getAttribute("type");
     return {
@@ -1420,10 +1459,22 @@ async function runBrowserTool(tool, args, presets = []) {
   };
 
   if (tool === "read_page") {
-    const text = normalize(document.body?.innerText);
+    const visibleText = normalize(document.body?.innerText);
+    const comments = collectHtmlComments();
+    const commentText = comments.length
+      ? `\n\nHTML COMMENTS:\n${comments.map((text, index) => `[${index + 1}] ${text}`).join("\n")}`
+      : "";
+    const text = `${visibleText}${commentText}`;
     const offset = clamp(args.offset, 0, text.length, 0);
     const limit = clamp(args.limit, 1, 8000, 5000);
-    return { title: document.title, url: location.href, offset, totalCharacters: text.length, text: text.slice(offset, offset + limit) };
+    return {
+      title: document.title,
+      url: location.href,
+      offset,
+      totalCharacters: text.length,
+      htmlCommentCount: comments.length,
+      text: text.slice(offset, offset + limit)
+    };
   }
 
   if (tool === "find_text") {
