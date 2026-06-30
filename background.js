@@ -413,6 +413,7 @@ chrome.runtime.onConnect.addListener((port) => {
       onReasoningDelta: (text) => port.postMessage({ type: "reasoning_delta", text }),
       onContentDelta: (text) => port.postMessage({ type: "content_delta", text }),
       onToolStep: (step) => port.postMessage({ type: "tool_step", ...step }),
+      onVisionScreenshot: (url) => port.postMessage({ type: "vision_screenshot", url }),
       requestApproval: (request) => new Promise((resolve) => {
         const id = crypto.randomUUID();
         pendingApproval = { id, resolve };
@@ -625,6 +626,10 @@ async function requestVisionCompletion(config, messages, pageContext, stream = {
   }
   throwIfAborted(stream.signal);
 
+  // Surface the captured frame to the side panel so the user sees exactly what the
+  // vision model saw (display-only; not added to model-visible history).
+  stream.onVisionScreenshot?.(imageDataUrl);
+
   const visionMessages = buildVisionMessages(
     config.systemPrompt,
     normalizeChatMessages(messages),
@@ -633,11 +638,14 @@ async function requestVisionCompletion(config, messages, pageContext, stream = {
   // Send at the full configured max_tokens (not the 768 tool-loop cap) and with
   // NO tools/tool_choice. shouldSendThinkingFlag only matches /glm/i, so Kimi
   // correctly never receives the GLM thinking flag.
-  return requestModel(visionProvider, visionMessages, Number(config.maxTokens), {
+  const result = await requestModel(visionProvider, visionMessages, Number(config.maxTokens), {
     signal: stream.signal,
     onReasoningDelta: stream.onReasoningDelta,
     onContentDelta: stream.onContentDelta
   });
+  // Carry the screenshot in the result too, so the thumbnail attaches whether the
+  // turn finished over the streaming port or the buffered fallback.
+  return { ...result, visionScreenshot: imageDataUrl };
 }
 
 function getPrimaryProvider(config, modelOverride = "") {

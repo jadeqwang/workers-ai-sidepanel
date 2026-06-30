@@ -1,0 +1,18 @@
+# glm-extension-proxy — deploy with `npx wrangler deploy` from this folder.
+#
+# Set the two secrets first (they are NOT stored here):
+#   npx wrangler secret put EXTENSION_TOKEN   # the bearer the extension sends
+#   npx wrangler secret put WORKERS_AI_TOKEN  # Cloudflare API token w/ Workers AI Read+Run
+#
+# Note: this version uses the OpenAI-compatible REST endpoint, so the old `AI` binding is no
+# longer required — you can remove it. ACCOUNT_ID + WORKERS_AI_TOKEN replace it.
+
+name = "glm-extension-proxy"
+main = "index.js"
+compatibility_date = "2026-06-01"
+
+[vars]
+# Your Cloudflare account ID (Workers AI → Use REST API shows it in the endpoint URL).
+ACCOUNT_ID = "REPLACE_WITH_YOUR_ACCOUNT_ID"
+# Default model when a request doesn't specify one (the extension usually does).
+MODEL = "@cf/zai-org/glm-5.2"

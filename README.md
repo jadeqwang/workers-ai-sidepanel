@@ -242,6 +242,23 @@ Chrome local storage is not a secret vault. This is appropriate for personal or 
 
 The extension requests endpoint host permissions only when settings are saved, and page host permissions only when you attach a page.
 
+## Self-hosted proxy (optional)
+
+If you put a Worker in front of Workers AI (to hold the API token server-side, gate access with a shared bearer, or stay reachable from networks that throttle `api.cloudflare.com`), use the reference proxy in [`worker/`](worker/). It authenticates the extension with a shared `EXTENSION_TOKEN` bearer and forwards to Workers AI.
+
+**It forwards to Cloudflare's OpenAI-compatible endpoint, not the `env.AI.run` native binding — and that matters for Vision.** The native binding does not accept OpenAI `image_url` content arrays: it silently strips the screenshot and tells the model it "has no multi-modal input ability," so vision turns fail even though the request succeeds. It also ignores the per-request model. Forwarding to `/v1/chat/completions` fixes both: images pass through and the per-turn model (GLM, Kimi, a vision model) is honored.
+
+Deploy from `worker/`:
+
+```bash
+npx wrangler secret put EXTENSION_TOKEN    # the bearer the extension's Bearer token field must match
+npx wrangler secret put WORKERS_AI_TOKEN   # a Cloudflare API token with Workers AI Read + Run
+# set ACCOUNT_ID and MODEL in wrangler.toml, then:
+npx wrangler deploy
+```
+
+In the extension, point the endpoint (and Vision endpoint, if used) at your Worker's `/v1/chat/completions` URL and set the Bearer token to your `EXTENSION_TOKEN`. For a vision turn, set the **Vision model** to a vision-capable model from your account's [Workers AI catalog](https://developers.cloudflare.com/workers-ai/models/) (e.g. `@cf/meta/llama-3.2-11b-vision-instruct`).
+
 ## Development
 
 Regenerate icons after editing `icons/icon.svg` or `scripts/generate-icons.js`:

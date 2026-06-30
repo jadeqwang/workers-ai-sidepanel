@@ -105,6 +105,7 @@ form.addEventListener("submit", async (event) => {
     content: "",
     reasoningContent: "",
     toolSteps: [],
+    visionScreenshot: "",
     pendingApproval: null,
     pending: true
   };
@@ -185,7 +186,15 @@ addPageButton.addEventListener("click", async () => {
     }
 
     const originPattern = `${new URL(tab.url).origin}/*`;
-    const granted = await chrome.permissions.request({ origins: [originPattern] });
+    // Vision uses captureVisibleTab, which requires the LITERAL <all_urls>
+    // permission or activeTab — and activeTab is broken from side panels, while
+    // scheme-limited patterns like https://*/* are NOT accepted (verified: capture
+    // still failed with https://*/*+http://*/* granted). So request <all_urls>.
+    // One call (back-to-back permissions.request loses transient activation); the
+    // grant persists, so this prompt appears only the first time.
+    const granted = await chrome.permissions.request({
+      origins: ["<all_urls>", originPattern]
+    });
     if (!granted) throw new Error("Page access was not granted.");
 
     const [injection] = await chrome.scripting.executeScript({
@@ -195,7 +204,8 @@ addPageButton.addEventListener("click", async () => {
     });
     if (!injection?.result?.text) throw new Error("No readable page text was found.");
 
-    pageContext = { ...injection.result, tabId: tab.id };
+    // Vision (Kimi) on by default — this is a vision-first puzzle copilot.
+    pageContext = { ...injection.result, tabId: tab.id, useVision: true };
     hoverDetails.clear();
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -566,6 +576,9 @@ function render() {
     if (message.role === "assistant" && message.reasoningContent) {
       article.append(createThinkingDisclosure(message.reasoningContent, message.pending));
     }
+    if (message.role === "assistant" && message.visionScreenshot) {
+      article.append(createVisionScreenshot(message.visionScreenshot));
+    }
     if (message.role === "assistant" && Array.isArray(message.toolSteps) && message.toolSteps.length) {
       article.append(createToolTimeline(message.toolSteps));
     }
@@ -673,6 +686,7 @@ async function rerunFromUserMessage(message) {
     content: "",
     reasoningContent: "",
     toolSteps: [],
+    visionScreenshot: "",
     pendingApproval: null,
     pending: true
   };
@@ -874,9 +888,30 @@ function updateRenderedAssistant(message) {
     }
   }
 
+  if (message.visionScreenshot && !article.querySelector(".vision-screenshot")) {
+    const timeline = article.querySelector(".tool-timeline");
+    const figure = createVisionScreenshot(message.visionScreenshot);
+    if (timeline) article.insertBefore(figure, timeline);
+    else article.append(figure);
+  }
+
   updateToolTimeline(article, message.toolSteps);
   updateApprovalCard(article, message.pendingApproval);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Thumbnail of the exact frame sent to the vision model, shown on the assistant
+// turn. Display-only — the image is never added to model-visible history.
+function createVisionScreenshot(url) {
+  const figure = document.createElement("figure");
+  figure.className = "vision-screenshot";
+  const image = document.createElement("img");
+  image.alt = "Screenshot sent to the vision model";
+  image.src = url;
+  const caption = document.createElement("figcaption");
+  caption.textContent = "What the vision model saw";
+  figure.append(image, caption);
+  return figure;
 }
 
 function streamAssistantResponse(assistantMessage, currentPageContext) {
@@ -917,6 +952,11 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         updateRenderedAssistant(assistantMessage);
         return;
       }
+      if (message?.type === "vision_screenshot") {
+        assistantMessage.visionScreenshot = message.url || "";
+        updateRenderedAssistant(assistantMessage);
+        return;
+      }
       if (message?.type === "tool_step") {
         assistantMessage.toolSteps ||= [];
         assistantMessage.pendingApproval = null;
@@ -947,6 +987,7 @@ function streamAssistantResponse(assistantMessage, currentPageContext) {
         assistantMessage.pendingApproval = null;
         assistantMessage.content = message.content || assistantMessage.content;
         assistantMessage.reasoningContent = message.reasoningContent || assistantMessage.reasoningContent;
+        if (message.visionScreenshot) assistantMessage.visionScreenshot = message.visionScreenshot;
         assistantMessage.pending = false;
         updateRenderedAssistant(assistantMessage);
         settle(resolve);
@@ -1002,6 +1043,7 @@ async function requestBufferedAssistantResponse(requestMessages, currentPageCont
   }
   assistantMessage.content = response.content || assistantMessage.content;
   assistantMessage.reasoningContent = response.reasoningContent || assistantMessage.reasoningContent;
+  if (response.visionScreenshot) assistantMessage.visionScreenshot = response.visionScreenshot;
   assistantMessage.pending = false;
   updateRenderedAssistant(assistantMessage);
 }

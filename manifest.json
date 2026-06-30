@@ -4,7 +4,7 @@
   "version": "0.4.0",
   "description": "A Chrome side panel for OpenAI-compatible Workers AI chat endpoints.",
   "permissions": ["storage", "sidePanel", "activeTab", "scripting", "tabs"],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "optional_host_permissions": ["<all_urls>", "https://*/*", "http://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
